@@ -3,6 +3,10 @@ name = "usb-atlas"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
+authors = ["kaislate"]
+license = "MIT"
+description = "A modern USB topology explorer for Windows"
+repository = "https://github.com/kaislate/USB-Atlas"
 
 [[bin]]
 name = "USB_Atlas"

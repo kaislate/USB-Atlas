@@ -140,3 +140,8 @@ cycle port need administrator rights ("Restart as administrator" in the menu).
 - Vendor/product names from the [linux-usb.org usb.ids](http://www.linux-usb.org/usb.ids)
   database (GPL-2.0-or-later or BSD-3-Clause), embedded at build time.
 - Icons: [Phosphor](https://phosphoricons.com) via `egui-phosphor`.
+
+## License
+
+MIT © kaislate – see [LICENSE](LICENSE). The bundled `assets/usb.ids`
+database keeps its own license (GPL-2.0-or-later or BSD-3-Clause).
