@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Speed;
@@ -27,7 +29,13 @@ pub enum Accent {
 }
 
 impl Accent {
-    pub const ALL: [Accent; 5] = [Accent::Indigo, Accent::Teal, Accent::Rose, Accent::Amber, Accent::Violet];
+    pub const ALL: [Accent; 5] = [
+        Accent::Indigo,
+        Accent::Teal,
+        Accent::Rose,
+        Accent::Amber,
+        Accent::Violet,
+    ];
 
     pub fn color(self, dark: bool) -> Color32 {
         match (self, dark) {
@@ -42,6 +50,104 @@ impl Accent {
             (Accent::Violet, true) => Color32::from_rgb(0xC0, 0x8B, 0xFF),
             (Accent::Violet, false) => Color32::from_rgb(0x7C, 0x3A, 0xD8),
         }
+    }
+}
+
+/// User overrides for connection colors (None = theme default).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LinkColors {
+    /// Low, Full, High, SuperSpeed, SuperSpeed+ 10G, SuperSpeed+ 20G.
+    pub speeds: [Option<[u8; 3]>; 6],
+    pub idle: Option<[u8; 3]>,
+    pub slow_lane: Option<[u8; 3]>,
+}
+
+pub const LINK_SPEEDS: [Speed; 6] = [
+    Speed::Low,
+    Speed::Full,
+    Speed::High,
+    Speed::Super,
+    Speed::SuperPlus,
+    Speed::SuperPlus20,
+];
+
+pub fn speed_index(s: Speed) -> Option<usize> {
+    LINK_SPEEDS.iter().position(|x| *x == s)
+}
+
+impl LinkColors {
+    pub fn is_default(&self) -> bool {
+        *self == LinkColors::default()
+    }
+
+    /// Named presets: (name, colors).
+    pub fn presets() -> Vec<(&'static str, LinkColors)> {
+        let rgb = |h: u32| Some([(h >> 16) as u8, (h >> 8) as u8, h as u8]);
+        vec![
+            ("Default", LinkColors::default()),
+            (
+                "Colorblind-safe",
+                // Okabe–Ito palette.
+                LinkColors {
+                    speeds: [
+                        rgb(0x999999),
+                        rgb(0x56B4E9),
+                        rgb(0xE69F00),
+                        rgb(0x0072B2),
+                        rgb(0x009E73),
+                        rgb(0xCC79A7),
+                    ],
+                    idle: rgb(0x6B7280),
+                    slow_lane: rgb(0xF0E442),
+                },
+            ),
+            (
+                "Traffic light",
+                LinkColors {
+                    speeds: [
+                        rgb(0xEF4444),
+                        rgb(0xF97316),
+                        rgb(0xEAB308),
+                        rgb(0x84CC16),
+                        rgb(0x22C55E),
+                        rgb(0x10B981),
+                    ],
+                    idle: rgb(0x64748B),
+                    slow_lane: rgb(0xF43F5E),
+                },
+            ),
+            (
+                "Neon",
+                LinkColors {
+                    speeds: [
+                        rgb(0x94A3B8),
+                        rgb(0x38BDF8),
+                        rgb(0xE879F9),
+                        rgb(0x22D3EE),
+                        rgb(0xA3E635),
+                        rgb(0xFB7185),
+                    ],
+                    idle: rgb(0x475569),
+                    slow_lane: rgb(0xFACC15),
+                },
+            ),
+            (
+                "Ocean",
+                LinkColors {
+                    speeds: [
+                        rgb(0x9CA3AF),
+                        rgb(0x7DD3FC),
+                        rgb(0x60A5FA),
+                        rgb(0x3B82F6),
+                        rgb(0x2DD4BF),
+                        rgb(0x818CF8),
+                    ],
+                    idle: rgb(0x64748B),
+                    slow_lane: rgb(0xFB923C),
+                },
+            ),
+        ]
     }
 }
 
@@ -65,6 +171,12 @@ pub struct Palette {
     pub error: Color32,
     pub guide: Color32,
     pub hex_hi: Color32,
+    /// Custom per-speed link colors.
+    pub link: [Option<Color32>; 6],
+    /// Dashed line for lanes without a device.
+    pub idle_link: Color32,
+    /// Highlight for devices on a slower lane than available.
+    pub slow_lane: Color32,
 }
 
 fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -99,6 +211,9 @@ impl Palette {
                 error: Color32::from_rgb(0xF8, 0x71, 0x71),
                 guide: Color32::from_rgb(0x2A, 0x30, 0x3A),
                 hex_hi: mix(bg, accent_c, 0.35),
+                link: [None; 6],
+                idle_link: Color32::from_rgb(0x3A, 0x41, 0x4D),
+                slow_lane: Color32::from_rgb(0xFB, 0xBF, 0x24),
             }
         } else {
             let bg = Color32::from_rgb(0xF4, 0xF5, 0xF8);
@@ -120,19 +235,70 @@ impl Palette {
                 error: Color32::from_rgb(0xDC, 0x26, 0x26),
                 guide: Color32::from_rgb(0xE3, 0xE6, 0xEC),
                 hex_hi: mix(Color32::WHITE, accent_c, 0.25),
+                link: [None; 6],
+                idle_link: Color32::from_rgb(0xC5, 0xCA, 0xD3),
+                slow_lane: Color32::from_rgb(0xD9, 0x77, 0x06),
             }
         }
     }
 
+    /// Applies user link-color overrides.
+    pub fn with_links(mut self, lc: &LinkColors) -> Self {
+        let c = |v: [u8; 3]| Color32::from_rgb(v[0], v[1], v[2]);
+        for (i, v) in lc.speeds.iter().enumerate() {
+            self.link[i] = v.map(c);
+        }
+        if let Some(v) = lc.idle {
+            self.idle_link = c(v);
+        }
+        if let Some(v) = lc.slow_lane {
+            self.slow_lane = c(v);
+        }
+        self
+    }
+
     pub fn speed(&self, s: Speed) -> Color32 {
+        if let Some(c) = speed_index(s).and_then(|i| self.link[i]) {
+            return c;
+        }
         let d = self.dark;
         match s {
             Speed::Unknown => self.text_faint,
-            Speed::Low | Speed::Full => if d { Color32::from_rgb(0x9C, 0xA8, 0xBA) } else { Color32::from_rgb(0x64, 0x74, 0x8B) },
-            Speed::High => if d { Color32::from_rgb(0xC4, 0xA1, 0xFF) } else { Color32::from_rgb(0x7C, 0x3A, 0xED) },
-            Speed::Super => if d { Color32::from_rgb(0x38, 0xBD, 0xF8) } else { Color32::from_rgb(0x02, 0x84, 0xC7) },
-            Speed::SuperPlus => if d { Color32::from_rgb(0x2D, 0xD4, 0xBF) } else { Color32::from_rgb(0x0D, 0x94, 0x88) },
-            Speed::SuperPlus20 => if d { Color32::from_rgb(0xF4, 0x72, 0xB6) } else { Color32::from_rgb(0xDB, 0x27, 0x77) },
+            Speed::Low | Speed::Full => {
+                if d {
+                    Color32::from_rgb(0x9C, 0xA8, 0xBA)
+                } else {
+                    Color32::from_rgb(0x64, 0x74, 0x8B)
+                }
+            }
+            Speed::High => {
+                if d {
+                    Color32::from_rgb(0xC4, 0xA1, 0xFF)
+                } else {
+                    Color32::from_rgb(0x7C, 0x3A, 0xED)
+                }
+            }
+            Speed::Super => {
+                if d {
+                    Color32::from_rgb(0x38, 0xBD, 0xF8)
+                } else {
+                    Color32::from_rgb(0x02, 0x84, 0xC7)
+                }
+            }
+            Speed::SuperPlus => {
+                if d {
+                    Color32::from_rgb(0x2D, 0xD4, 0xBF)
+                } else {
+                    Color32::from_rgb(0x0D, 0x94, 0x88)
+                }
+            }
+            Speed::SuperPlus20 => {
+                if d {
+                    Color32::from_rgb(0xF4, 0x72, 0xB6)
+                } else {
+                    Color32::from_rgb(0xDB, 0x27, 0x77)
+                }
+            }
         }
     }
 
@@ -170,11 +336,25 @@ fn load_system_font(name: &str) -> Option<Arc<FontData>> {
 
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let default_prop = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    let default_mono = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
+    let default_prop = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let default_mono = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
 
-    fonts.font_data.insert("phosphor".into(), egui_phosphor::Variant::Regular.font_data().into());
-    fonts.font_data.insert("phosphor-fill".into(), egui_phosphor::Variant::Fill.font_data().into());
+    fonts.font_data.insert(
+        "phosphor".into(),
+        egui_phosphor::Variant::Regular.font_data().into(),
+    );
+    fonts.font_data.insert(
+        "phosphor-fill".into(),
+        egui_phosphor::Variant::Fill.font_data().into(),
+    );
 
     let mut prop = Vec::new();
     let mut semi = Vec::new();
@@ -191,7 +371,9 @@ pub fn install_fonts(ctx: &egui::Context) {
     semi.extend(prop.iter().cloned());
 
     let mut mono = Vec::new();
-    if let Some(f) = load_system_font("CascadiaMono.ttf").or_else(|| load_system_font("consola.ttf")) {
+    if let Some(f) =
+        load_system_font("CascadiaMono.ttf").or_else(|| load_system_font("consola.ttf"))
+    {
         fonts.font_data.insert("mono".into(), f);
         mono.push("mono".to_string());
     }
@@ -203,16 +385,28 @@ pub fn install_fonts(ctx: &egui::Context) {
 
     fonts.families.insert(FontFamily::Proportional, prop);
     fonts.families.insert(FontFamily::Monospace, mono);
-    fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), semi);
-    fonts.families.insert(FontFamily::Name(ICON_FILL.into()), fill);
+    fonts
+        .families
+        .insert(FontFamily::Name(SEMIBOLD.into()), semi);
+    fonts
+        .families
+        .insert(FontFamily::Name(ICON_FILL.into()), fill);
     ctx.set_fonts(fonts);
 }
 
 pub fn apply(ctx: &egui::Context, p: &Palette) {
-    let mut visuals = if p.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let mut visuals = if p.dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
     visuals.panel_fill = p.panel;
     visuals.window_fill = p.card;
-    visuals.extreme_bg_color = if p.dark { Color32::from_rgb(0x0B, 0x0D, 0x10) } else { Color32::from_rgb(0xF7, 0xF8, 0xFA) };
+    visuals.extreme_bg_color = if p.dark {
+        Color32::from_rgb(0x0B, 0x0D, 0x10)
+    } else {
+        Color32::from_rgb(0xF7, 0xF8, 0xFA)
+    };
     visuals.faint_bg_color = p.card_hover;
     visuals.window_stroke = Stroke::new(1.0, p.border);
     visuals.window_corner_radius = CornerRadius::same(12);
@@ -223,8 +417,18 @@ pub fn apply(ctx: &egui::Context, p: &Palette) {
     visuals.warn_fg_color = p.warn;
     visuals.error_fg_color = p.error;
     visuals.override_text_color = Some(p.text);
-    visuals.window_shadow = egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if p.dark { 110 } else { 40 }) };
-    visuals.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) };
+    visuals.window_shadow = egui::Shadow {
+        offset: [0, 8],
+        blur: 28,
+        spread: 0,
+        color: Color32::from_black_alpha(if p.dark { 110 } else { 40 }),
+    };
+    visuals.popup_shadow = egui::Shadow {
+        offset: [0, 6],
+        blur: 18,
+        spread: 0,
+        color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }),
+    };
 
     let r = CornerRadius::same(7);
     let w = &mut visuals.widgets;
@@ -271,4 +475,38 @@ pub fn apply(ctx: &egui::Context, p: &Palette) {
         .into();
         style.animation_time = 0.14;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn link_color_overrides_apply_and_reset() {
+        let base = Palette::new(true, Accent::Indigo);
+        let mut lc = LinkColors::default();
+        lc.speeds[speed_index(Speed::High).unwrap()] = Some([1, 2, 3]);
+        lc.slow_lane = Some([9, 9, 9]);
+        let p = base.with_links(&lc);
+        assert_eq!(p.speed(Speed::High), Color32::from_rgb(1, 2, 3));
+        assert_eq!(
+            p.speed(Speed::Super),
+            base.speed(Speed::Super),
+            "untouched speeds keep theme colors"
+        );
+        assert_eq!(p.slow_lane, Color32::from_rgb(9, 9, 9));
+        assert_eq!(
+            base.with_links(&LinkColors::default()).speed(Speed::High),
+            base.speed(Speed::High)
+        );
+    }
+
+    #[test]
+    fn presets_are_complete_and_distinct() {
+        for (name, lc) in LinkColors::presets().into_iter().skip(1) {
+            let set: std::collections::HashSet<_> =
+                lc.speeds.iter().map(|c| c.expect(name)).collect();
+            assert_eq!(set.len(), 6, "{name} must give every speed its own color");
+        }
+    }
 }

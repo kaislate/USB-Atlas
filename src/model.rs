@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::descriptors::DeviceDescriptor;
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
 pub enum Speed {
     #[default]
     Unknown,
@@ -118,7 +120,12 @@ impl ConnectionStatus {
         use ConnectionStatus::*;
         matches!(
             self,
-            FailedEnumeration | GeneralFailure | Overcurrent | NotEnoughPower | NotEnoughBandwidth | HubNestedTooDeeply
+            FailedEnumeration
+                | GeneralFailure
+                | Overcurrent
+                | NotEnoughPower
+                | NotEnoughBandwidth
+                | HubNestedTooDeeply
         )
     }
 }
@@ -415,7 +422,11 @@ pub struct Controller {
 impl Controller {
     pub fn kind(&self) -> &'static str {
         let s = format!("{} {}", self.info.display_name(), self.flavor).to_lowercase();
-        if s.contains("xhci") || s.contains("extensible") || s.contains("usb 3") || s.contains("usb4") {
+        if s.contains("xhci")
+            || s.contains("extensible")
+            || s.contains("usb 3")
+            || s.contains("usb4")
+        {
             "xHCI"
         } else if s.contains("ehci") || s.contains("enhanced") {
             "EHCI"

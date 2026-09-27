@@ -4,7 +4,14 @@ use crate::descriptors::DeviceDescriptor;
 use crate::model::*;
 
 fn strings(items: &[(u8, &str)]) -> Vec<StringDesc> {
-    items.iter().map(|(i, t)| StringDesc { index: *i, lang: 0x0409, text: t.to_string() }).collect()
+    items
+        .iter()
+        .map(|(i, t)| StringDesc {
+            index: *i,
+            lang: 0x0409,
+            text: t.to_string(),
+        })
+        .collect()
 }
 
 fn config(body: &[&[u8]], attrs: u8, max_power: u8, n_if: u8) -> Vec<u8> {
@@ -94,37 +101,53 @@ fn info(id: &str, desc: &str, class: &str, service: &str) -> DevInfo {
     }
 }
 
-fn port(index: u32, usb3: bool, device: Option<Device>) -> Port {
+/// A port that is one lane of a physical connector. `companion` is the
+/// port number of the other lane on hub `companion_hub` (0 = none).
+fn lane(
+    index: u32,
+    usb3: bool,
+    companion: u32,
+    companion_hub: &str,
+    device: Option<Device>,
+) -> Port {
     Port {
         index,
-        status: if device.is_some() { ConnectionStatus::Connected } else { ConnectionStatus::NoDevice },
+        status: if device.is_some() {
+            ConnectionStatus::Connected
+        } else {
+            ConnectionStatus::NoDevice
+        },
         connector: Some(PortConnector {
             companion_index: 0,
-            companion_port: if usb3 { index + 10 } else { 0 } as u16,
-            companion_hub: String::new(),
+            companion_port: companion as u16,
+            companion_hub: if companion == 0 {
+                String::new()
+            } else {
+                companion_hub.to_string()
+            },
             user_connectable: true,
             debug_capable: false,
             multi_companions: false,
             type_c: false,
         }),
-        supports_usb110: true,
-        supports_usb200: true,
+        supports_usb110: !usb3,
+        supports_usb200: !usb3,
         supports_usb300: usb3,
         device,
     }
 }
 
 const HID_MOUSE_IF: &[u8] = &[
-    0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00, 0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x4A, 0x00, 0x07, 0x05, 0x81,
-    0x03, 0x08, 0x00, 0x01,
+    0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00, 0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22,
+    0x4A, 0x00, 0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x01,
 ];
 const HID_KBD_IF: &[u8] = &[
-    0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00, 0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 0x3B, 0x00, 0x07, 0x05, 0x82,
-    0x03, 0x08, 0x00, 0x08,
+    0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00, 0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22,
+    0x3B, 0x00, 0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x08,
 ];
 const MSC_IF: &[u8] = &[
-    0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00, 0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00, 0x07, 0x05, 0x02, 0x02, 0x00,
-    0x02, 0x00,
+    0x09, 0x04, 0x00, 0x00, 0x02, 0x08, 0x06, 0x50, 0x00, 0x07, 0x05, 0x81, 0x02, 0x00, 0x02, 0x00,
+    0x07, 0x05, 0x02, 0x02, 0x00, 0x02, 0x00,
 ];
 const UVC_IF: &[u8] = &[
     0x08, 0x0B, 0x00, 0x02, 0x0E, 0x03, 0x00, 0x02, // IAD
@@ -133,26 +156,46 @@ const UVC_IF: &[u8] = &[
     0x07, 0x05, 0x83, 0x03, 0x10, 0x00, 0x08, // int ep
     0x09, 0x04, 0x01, 0x00, 0x00, 0x0E, 0x02, 0x00, 0x00, // VS alt0
     0x0B, 0x24, 0x06, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // MJPEG format
-    0x1E, 0x24, 0x07, 0x01, 0x00, 0x80, 0x07, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x15, 0x16, 0x05, 0x00, 0x01, 0x15, 0x16, 0x05, 0x00, // frame 1920x1080
+    0x1E, 0x24, 0x07, 0x01, 0x00, 0x80, 0x07, 0x38, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x15, 0x16, 0x05, 0x00, 0x01, 0x15, 0x16, 0x05,
+    0x00, // frame 1920x1080
     0x09, 0x04, 0x01, 0x01, 0x01, 0x0E, 0x02, 0x00, 0x00, // VS alt1
     0x07, 0x05, 0x81, 0x05, 0x00, 0x14, 0x01, // iso ep
     0x08, 0x0B, 0x02, 0x02, 0x01, 0x02, 0x00, 0x03, // audio IAD
-    0x09, 0x04, 0x02, 0x00, 0x00, 0x01, 0x01, 0x00, 0x03, 0x09, 0x24, 0x01, 0x00, 0x01, 0x26, 0x00, 0x01, 0x03, 0x0C, 0x24, 0x02,
-    0x01, 0x01, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x09, 0x04, 0x03, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
+    0x09, 0x04, 0x02, 0x00, 0x00, 0x01, 0x01, 0x00, 0x03, 0x09, 0x24, 0x01, 0x00, 0x01, 0x26, 0x00,
+    0x01, 0x03, 0x0C, 0x24, 0x02, 0x01, 0x01, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x09, 0x04,
+    0x03, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
 ];
 const CDC_IF: &[u8] = &[
     0x08, 0x0B, 0x00, 0x02, 0x02, 0x02, 0x01, 0x00, // IAD
-    0x09, 0x04, 0x00, 0x00, 0x01, 0x02, 0x02, 0x01, 0x00, 0x05, 0x24, 0x00, 0x10, 0x01, 0x05, 0x24, 0x01, 0x00, 0x01, 0x04, 0x24,
-    0x02, 0x02, 0x05, 0x24, 0x06, 0x00, 0x01, 0x07, 0x05, 0x83, 0x03, 0x08, 0x00, 0x10, 0x09, 0x04, 0x01, 0x00, 0x02, 0x0A, 0x00,
-    0x00, 0x00, 0x07, 0x05, 0x01, 0x02, 0x40, 0x00, 0x00, 0x07, 0x05, 0x82, 0x02, 0x40, 0x00, 0x00,
+    0x09, 0x04, 0x00, 0x00, 0x01, 0x02, 0x02, 0x01, 0x00, 0x05, 0x24, 0x00, 0x10, 0x01, 0x05, 0x24,
+    0x01, 0x00, 0x01, 0x04, 0x24, 0x02, 0x02, 0x05, 0x24, 0x06, 0x00, 0x01, 0x07, 0x05, 0x83, 0x03,
+    0x08, 0x00, 0x10, 0x09, 0x04, 0x01, 0x00, 0x02, 0x0A, 0x00, 0x00, 0x00, 0x07, 0x05, 0x01, 0x02,
+    0x40, 0x00, 0x00, 0x07, 0x05, 0x82, 0x02, 0x40, 0x00, 0x00,
 ];
 
 pub fn snapshot() -> Snapshot {
-    let mut receiver_info = info(r"USB\VID_046D&PID_C52B\5&2A1B3C4D&0&1", "USB Composite Device", "USB", "usbccgp");
+    let mut receiver_info = info(
+        r"USB\VID_046D&PID_C52B\5&2A1B3C4D&0&1",
+        "USB Composite Device",
+        "USB",
+        "usbccgp",
+    );
     receiver_info.children = vec![
-        DevInfo { instance_id: r"USB\VID_046D&PID_C52B&MI_00\6&1".into(), description: "USB Input Device".into(), class: "HIDClass".into(), service: "HidUsb".into(), ..Default::default() },
-        DevInfo { instance_id: r"USB\VID_046D&PID_C52B&MI_01\6&2".into(), description: "USB Input Device".into(), class: "HIDClass".into(), service: "HidUsb".into(), ..Default::default() },
+        DevInfo {
+            instance_id: r"USB\VID_046D&PID_C52B&MI_00\6&1".into(),
+            description: "USB Input Device".into(),
+            class: "HIDClass".into(),
+            service: "HidUsb".into(),
+            ..Default::default()
+        },
+        DevInfo {
+            instance_id: r"USB\VID_046D&PID_C52B&MI_01\6&2".into(),
+            description: "USB Input Device".into(),
+            class: "HIDClass".into(),
+            service: "HidUsb".into(),
+            ..Default::default()
+        },
     ];
     let receiver = device(
         D {
@@ -169,9 +212,15 @@ pub fn snapshot() -> Snapshot {
         receiver_info,
     );
 
-    let mut flash_info = info(r"USB\VID_0781&PID_5583\4C530001230416115024", "USB Mass Storage Device", "USB", "USBSTOR");
+    let mut flash_info = info(
+        r"USB\VID_0781&PID_5583\4C530001230416115024",
+        "USB Mass Storage Device",
+        "USB",
+        "USBSTOR",
+    );
     flash_info.children = vec![DevInfo {
-        instance_id: r"USBSTOR\DISK&VEN_SANDISK&PROD_ULTRA_FIT&REV_1.00\4C530001230416115024&0".into(),
+        instance_id: r"USBSTOR\DISK&VEN_SANDISK&PROD_ULTRA_FIT&REV_1.00\4C530001230416115024&0"
+            .into(),
         friendly_name: "SanDisk Ultra Fit USB Device".into(),
         class: "DiskDrive".into(),
         service: "disk".into(),
@@ -200,10 +249,27 @@ pub fn snapshot() -> Snapshot {
         flash_info,
     );
 
-    let mut cam_info = info(r"USB\VID_046D&PID_085E\B5F2E1A0", "USB Composite Device", "USB", "usbccgp");
+    let mut cam_info = info(
+        r"USB\VID_046D&PID_085E\B5F2E1A0",
+        "USB Composite Device",
+        "USB",
+        "usbccgp",
+    );
     cam_info.children = vec![
-        DevInfo { instance_id: r"USB\VID_046D&PID_085E&MI_00\7&1".into(), friendly_name: "Logitech BRIO".into(), class: "Camera".into(), service: "usbvideo".into(), ..Default::default() },
-        DevInfo { instance_id: r"USB\VID_046D&PID_085E&MI_02\7&2".into(), friendly_name: "Microphone (Logitech BRIO)".into(), class: "MEDIA".into(), service: "usbaudio".into(), ..Default::default() },
+        DevInfo {
+            instance_id: r"USB\VID_046D&PID_085E&MI_00\7&1".into(),
+            friendly_name: "Logitech BRIO".into(),
+            class: "Camera".into(),
+            service: "usbvideo".into(),
+            ..Default::default()
+        },
+        DevInfo {
+            instance_id: r"USB\VID_046D&PID_085E&MI_02\7&2".into(),
+            friendly_name: "Microphone (Logitech BRIO)".into(),
+            class: "MEDIA".into(),
+            service: "usbaudio".into(),
+            ..Default::default()
+        },
     ];
     let cam = device(
         D {
@@ -220,7 +286,12 @@ pub fn snapshot() -> Snapshot {
         cam_info,
     );
 
-    let mut serial_info = info(r"USB\VID_2E8A&PID_000A\E6614C311B7A8B2F", "USB Serial Device", "Ports", "usbser");
+    let mut serial_info = info(
+        r"USB\VID_2E8A&PID_000A\E6614C311B7A8B2F",
+        "USB Serial Device",
+        "Ports",
+        "usbser",
+    );
     serial_info.com_port = "COM7".into();
     serial_info.friendly_name = "USB Serial Device (COM7)".into();
     let pico = device(
@@ -238,7 +309,24 @@ pub fn snapshot() -> Snapshot {
         serial_info,
     );
 
-    let mut hub_dev = device(
+    const ROOT: &str = "USB#ROOT_HUB30#4&1&0#{f18a0e88-c30c-11d0-8815-00a0c906bed8}";
+    const HS_HALF: &str = "USB#VID_2109&PID_2817#5&10#{f18a0e88-c30c-11d0-8815-00a0c906bed8}";
+    const SS_HALF: &str = "USB#VID_2109&PID_0817#5&11#{f18a0e88-c30c-11d0-8815-00a0c906bed8}";
+    const ROOT2: &str = "USB#ROOT_HUB30#4&2&0#{f18a0e88-c30c-11d0-8815-00a0c906bed8}";
+
+    // A USB 3 hub is two hubs in one box: a SuperSpeed half and a USB 2 half.
+    let hub_cfg = |proto: u8| {
+        config(
+            &[&[
+                0x09, 0x04, 0x00, 0x00, 0x01, 0x09, 0x00, proto, 0x00, 0x07, 0x05, 0x81, 0x03,
+                0x02, 0x00, 0x08,
+            ]],
+            0xE0,
+            0x00,
+            1,
+        )
+    };
+    let mut ss_hub = device(
         D {
             vid: 0x2109,
             pid: 0x0817,
@@ -248,42 +336,90 @@ pub fn snapshot() -> Snapshot {
             product: "USB3.0 Hub",
             mfr: "VIA Labs, Inc.",
             serial: None,
-            cfg: config(&[&[0x09, 0x04, 0x00, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00, 0x07, 0x05, 0x81, 0x03, 0x02, 0x00, 0x08, 0x06, 0x30, 0x00, 0x00, 0x02, 0x00]], 0xE0, 0x00, 1),
+            cfg: hub_cfg(0),
         },
-        info(r"USB\VID_2109&PID_0817\5&11", "Generic SuperSpeed USB Hub", "USB", "USBHUB3"),
+        info(
+            r"USB\VID_2109&PID_0817\5&11",
+            "Generic SuperSpeed USB Hub",
+            "USB",
+            "USBHUB3",
+        ),
     );
-    hub_dev.hub = Some(Box::new(Hub {
-        symbolic_name: "USB#VID_2109&PID_0817#5&11#{f18a0e88-c30c-11d0-8815-00a0c906bed8}".into(),
-        is_root: false,
-        hub_type: "USB 3.0 Hub".into(),
-        descriptor: vec![0x0C, 0x2A, 0x04, 0x09, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    ss_hub.hub = Some(Box::new(Hub {
+        symbolic_name: SS_HALF.into(),
+        hub_type: "USB 3.x Hub".into(),
+        descriptor: vec![
+            0x0C, 0x2A, 0x04, 0x09, 0x00, 0x32, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
         num_ports: 4,
-        bus_powered: false,
+        ports: vec![
+            lane(1, true, 1, HS_HALF, Some(cam)),
+            lane(2, true, 2, HS_HALF, None),
+            lane(3, true, 3, HS_HALF, None),
+            lane(4, true, 4, HS_HALF, None),
+        ],
+        ..Default::default()
+    }));
+    let mut hs_hub = device(
+        D {
+            vid: 0x2109,
+            pid: 0x2817,
+            bcd_usb: 0x0210,
+            class: (0x09, 0x00, 0x02),
+            speed: Speed::High,
+            product: "USB2.0 Hub",
+            mfr: "VIA Labs, Inc.",
+            serial: None,
+            cfg: hub_cfg(2),
+        },
+        info(
+            r"USB\VID_2109&PID_2817\5&10",
+            "Generic USB Hub",
+            "USB",
+            "USBHUB3",
+        ),
+    );
+    hs_hub.hub = Some(Box::new(Hub {
+        symbolic_name: HS_HALF.into(),
+        hub_type: "USB 2.0 Hub".into(),
+        descriptor: vec![0x09, 0x29, 0x04, 0xE9, 0x00, 0x32, 0x64, 0x00, 0xFF],
+        num_ports: 4,
         high_speed_capable: true,
-        multi_tt: false,
-        info: None,
-        ports: vec![port(1, true, Some(cam)), port(2, true, Some(pico)), port(3, true, None), port(4, true, None)],
-        error: None,
+        multi_tt: true,
+        ports: vec![
+            lane(1, false, 1, SS_HALF, None),
+            lane(2, false, 2, SS_HALF, Some(pico)),
+            lane(3, false, 3, SS_HALF, None),
+            lane(4, false, 4, SS_HALF, None),
+        ],
+        ..Default::default()
     }));
 
-    let mut bad_info = info(r"USB\VID_0000&PID_0002\5&3", "Unknown USB Device (Device Descriptor Request Failed)", "USB", "");
+    let mut bad_info = info(
+        r"USB\VID_0000&PID_0002\5&3",
+        "Unknown USB Device (Device Descriptor Request Failed)",
+        "USB",
+        "",
+    );
     bad_info.problem_code = 43;
-    let mut bad = Device {
+    let bad = Device {
         speed: Speed::Full,
-        device_descriptor: vec![0x12, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0, 0, 0, 0],
+        device_descriptor: vec![
+            0x12, 0x01, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0, 0, 0, 0,
+        ],
         info: Some(bad_info),
         ..Default::default()
     };
-    bad.address = 0;
 
-    let mut oc = port(8, false, None);
+    let mut oc = lane(6, false, 0, "", None);
     oc.status = ConnectionStatus::Overcurrent;
-    let mut typec = port(9, true, None);
-    typec.connector.as_mut().unwrap().type_c = true;
-    let mut internal = port(10, false, None);
-    internal.connector.as_mut().unwrap().user_connectable = false;
-    let bt_info = info(r"USB\VID_8087&PID_0033\5&4", "Intel(R) Wireless Bluetooth(R)", "Bluetooth", "BTHUSB");
-    internal.device = Some(device(
+    let bt_info = info(
+        r"USB\VID_8087&PID_0033\5&4",
+        "Intel(R) Wireless Bluetooth(R)",
+        "Bluetooth",
+        "BTHUSB",
+    );
+    let bt = device(
         D {
             vid: 0x8087,
             pid: 0x0033,
@@ -293,50 +429,135 @@ pub fn snapshot() -> Snapshot {
             product: "",
             mfr: "",
             serial: None,
-            cfg: config(&[&[0x09, 0x04, 0x00, 0x00, 0x01, 0xE0, 0x01, 0x01, 0x00, 0x07, 0x05, 0x81, 0x03, 0x40, 0x00, 0x01]], 0xE0, 0x32, 1),
+            cfg: config(
+                &[&[
+                    0x09, 0x04, 0x00, 0x00, 0x01, 0xE0, 0x01, 0x01, 0x00, 0x07, 0x05, 0x81, 0x03,
+                    0x40, 0x00, 0x01,
+                ]],
+                0xE0,
+                0x32,
+                1,
+            ),
         },
         bt_info,
-    ));
-    internal.status = ConnectionStatus::Connected;
+    );
+    let mut internal = lane(11, false, 0, "", Some(bt));
+    internal.connector.as_mut().unwrap().user_connectable = false;
 
-    let mut bad_port = port(7, false, Some(bad));
-    bad_port.status = ConnectionStatus::Connected;
-
+    // xHCI root hub: USB 2 lanes 1-6, SuperSpeed lanes 7-10 (companions 1<->7 ... 4<->10).
+    let mut ports = vec![
+        lane(1, false, 7, ROOT, Some(receiver)),
+        lane(2, false, 8, ROOT, None),
+        lane(3, false, 9, ROOT, Some(flash)),
+        lane(4, false, 10, ROOT, Some(hs_hub)),
+        lane(5, false, 0, "", Some(bad)),
+        oc,
+        lane(7, true, 1, ROOT, None),
+        lane(8, true, 2, ROOT, None),
+        lane(9, true, 3, ROOT, None),
+        lane(10, true, 4, ROOT, Some(ss_hub)),
+        internal,
+    ];
+    for i in [1, 7] {
+        ports[i].connector.as_mut().unwrap().type_c = true;
+    }
     let root = Hub {
-        symbolic_name: "USB#ROOT_HUB30#4&1&0#{f18a0e88-c30c-11d0-8815-00a0c906bed8}".into(),
+        symbolic_name: ROOT.into(),
         is_root: true,
-        hub_type: "USB 3.0 Root Hub".into(),
-        descriptor: vec![0x0C, 0x2A, 0x0A, 0x09, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        num_ports: 10,
-        bus_powered: false,
-        high_speed_capable: true,
-        multi_tt: false,
-        info: Some(info(r"USB\ROOT_HUB30\4&1&0&0", "USB Root Hub (USB 3.0)", "USB", "USBHUB3")),
-        ports: vec![
-            port(1, false, Some(receiver)),
-            port(2, true, None),
-            port(3, true, Some(flash)),
-            port(4, true, None),
-            port(5, true, Some(hub_dev)),
-            port(6, false, None),
-            bad_port,
-            oc,
-            typec,
-            internal,
+        hub_type: "Root Hub".into(),
+        descriptor: vec![
+            0x0C, 0x2A, 0x0B, 0x09, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ],
-        error: None,
+        num_ports: 11,
+        info: Some(info(
+            r"USB\ROOT_HUB30\4&1&0&0",
+            "USB Root Hub (USB 3.0)",
+            "USB",
+            "USBHUB3",
+        )),
+        ports,
+        ..Default::default()
     };
 
-    let mut ctrl_info = info(r"PCI\VEN_8086&DEV_7AE0&SUBSYS_7D251462&REV_11\3&11583659&0&A0", "Intel(R) USB 3.20 eXtensible Host Controller - 1.20 (Microsoft)", "USB", "USBXHCI");
+    let mut ctrl_info = info(
+        r"PCI\VEN_8086&DEV_7AE0&SUBSYS_7D251462&REV_11\3&11583659&0&A0",
+        "Intel(R) USB 3.20 eXtensible Host Controller - 1.20 (Microsoft)",
+        "USB",
+        "USBXHCI",
+    );
     ctrl_info.location_info = "PCI bus 0, device 20, function 0".into();
 
-    let root2 = Hub {
-        symbolic_name: "USB#ROOT_HUB30#4&2&0#{f18a0e88-c30c-11d0-8815-00a0c906bed8}".into(),
-        is_root: true,
-        hub_type: "USB 3.0 Root Hub".into(),
+    // Second controller: an old USB 2.0-only hub with a USB 3 SSD behind it.
+    let ssd = device(
+        D {
+            vid: 0x04E8,
+            pid: 0x61F5,
+            bcd_usb: 0x0320,
+            class: (0, 0, 0),
+            speed: Speed::High,
+            product: "Portable SSD T5",
+            mfr: "Samsung",
+            serial: Some("S46UNX0M301234"),
+            cfg: config(&[MSC_IF], 0x80, 0x70, 1),
+        },
+        info(
+            r"USB\VID_04E8&PID_61F5\S46UNX0M301234",
+            "USB Mass Storage Device",
+            "USB",
+            "USBSTOR",
+        ),
+    );
+    let mut old_hub = device(
+        D {
+            vid: 0x1A40,
+            pid: 0x0101,
+            bcd_usb: 0x0200,
+            class: (0x09, 0x00, 0x01),
+            speed: Speed::High,
+            product: "USB 2.0 Hub",
+            mfr: "Terminus Technology",
+            serial: None,
+            cfg: hub_cfg(1),
+        },
+        info(
+            r"USB\VID_1A40&PID_0101\6&1",
+            "Generic USB Hub",
+            "USB",
+            "USBHUB3",
+        ),
+    );
+    old_hub.hub = Some(Box::new(Hub {
+        symbolic_name: "USB#VID_1A40&PID_0101#6&1#{f18a0e88-c30c-11d0-8815-00a0c906bed8}".into(),
+        hub_type: "USB 2.0 Hub".into(),
+        descriptor: vec![0x09, 0x29, 0x04, 0xE0, 0x00, 0x32, 0x64, 0x00, 0xFF],
         num_ports: 4,
-        info: Some(info(r"USB\ROOT_HUB30\4&2&0&0", "USB Root Hub (USB 3.0)", "USB", "USBHUB3")),
-        ports: vec![port(1, true, None), port(2, true, None), port(3, false, None), port(4, false, None)],
+        bus_powered: true,
+        high_speed_capable: true,
+        ports: vec![
+            lane(1, false, 0, "", None),
+            lane(2, false, 0, "", Some(ssd)),
+            lane(3, false, 0, "", None),
+            lane(4, false, 0, "", None),
+        ],
+        ..Default::default()
+    }));
+    let root2 = Hub {
+        symbolic_name: ROOT2.into(),
+        is_root: true,
+        hub_type: "Root Hub".into(),
+        num_ports: 4,
+        info: Some(info(
+            r"USB\ROOT_HUB30\4&2&0&0",
+            "USB Root Hub (USB 3.0)",
+            "USB",
+            "USBHUB3",
+        )),
+        ports: vec![
+            lane(1, false, 3, ROOT2, Some(old_hub)),
+            lane(2, false, 4, ROOT2, None),
+            lane(3, true, 1, ROOT2, None),
+            lane(4, true, 2, ROOT2, None),
+        ],
         ..Default::default()
     };
 
@@ -344,7 +565,12 @@ pub fn snapshot() -> Snapshot {
         format: Snapshot::FORMAT,
         app_version: env!("CARGO_PKG_VERSION").into(),
         taken_at: "demo".into(),
-        computer: ComputerInfo { name: "DEMO-PC".into(), os: "Windows 11 Pro 24H2 (demo data)".into(), user: "demo".into(), is_admin: false },
+        computer: ComputerInfo {
+            name: "DEMO-PC".into(),
+            os: "Windows 11 Pro 24H2 (demo data)".into(),
+            user: "demo".into(),
+            is_admin: false,
+        },
         controllers: vec![
             Controller {
                 info: ctrl_info,
@@ -352,12 +578,17 @@ pub fn snapshot() -> Snapshot {
                 pci_device: Some(0x7AE0),
                 pci_revision: Some(0x11),
                 flavor: "USB 3 xHCI".into(),
-                num_root_ports: 10,
+                num_root_ports: 11,
                 root_hub: Some(root),
                 error: None,
             },
             Controller {
-                info: info(r"PCI\VEN_1022&DEV_15B6&SUBSYS_7D251462&REV_00\4&2", "AMD USB 3.10 eXtensible Host Controller - 1.10 (Microsoft)", "USB", "USBXHCI"),
+                info: info(
+                    r"PCI\VEN_1022&DEV_15B6&SUBSYS_7D251462&REV_00\4&2",
+                    "AMD USB 3.10 eXtensible Host Controller - 1.10 (Microsoft)",
+                    "USB",
+                    "USBXHCI",
+                ),
                 pci_vendor: Some(0x1022),
                 pci_device: Some(0x15B6),
                 pci_revision: Some(0),

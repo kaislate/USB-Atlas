@@ -19,35 +19,6 @@ pub struct Insight {
 }
 
 /// Returns a message if the device could run faster than it currently does.
-pub fn speed_mismatch(port: &Port, dev: &Device) -> Option<String> {
-    if dev.is_hub || dev.speed == Speed::Unknown {
-        return None;
-    }
-    let cap = dev.max_capable_speed();
-    if cap <= dev.speed {
-        return None;
-    }
-    let port_usb3 = port.supports_usb300 || port.connector.as_ref().is_some_and(|c| c.companion_port != 0);
-    Some(match (cap, dev.speed) {
-        (Speed::SuperPlus | Speed::SuperPlus20, Speed::Super) => {
-            "The device supports SuperSpeedPlus (10 Gbit/s+) but runs at 5 Gbit/s. Use a USB 3.2 Gen 2 port and cable.".into()
-        }
-        (c, Speed::High) if c.is_super() => {
-            let why = if port_usb3 {
-                "The port supports USB 3, so the cable or an intermediate hub is probably USB 2 only."
-            } else {
-                "The port is USB 2 only – plug it into a USB 3 (blue / SS) port."
-            };
-            format!("SuperSpeed-capable device is running at High Speed (480 Mbit/s). {why}")
-        }
-        (c, s) => format!(
-            "The device supports {} but is connected at {}. A slower hub or port in the path limits it.",
-            c.label(),
-            s.label()
-        ),
-    })
-}
-
 pub fn problem_text(code: u32) -> &'static str {
     match code {
         1 => "Not configured correctly (CM_PROB_NOT_CONFIGURED)",
@@ -97,7 +68,12 @@ pub fn has_boot_keyboard(cfg: &[u8]) -> bool {
         if len < 2 {
             break;
         }
-        if cfg[pos + 1] == 0x04 && pos + 7 < cfg.len() && cfg[pos + 5] == 0x03 && cfg[pos + 6] == 0x01 && cfg[pos + 7] == 0x01 {
+        if cfg[pos + 1] == 0x04
+            && pos + 7 < cfg.len()
+            && cfg[pos + 5] == 0x03
+            && cfg[pos + 6] == 0x01
+            && cfg[pos + 7] == 0x01
+        {
             return true;
         }
         pos += len;
@@ -107,6 +83,7 @@ pub fn has_boot_keyboard(cfg: &[u8]) -> bool {
 
 pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
     let mut out = Vec::new();
+    let phys = crate::physical::Physical::build(snap);
     for n in &flat.nodes {
         match &n.path {
             NodePath::Controller(ci) => {
@@ -121,7 +98,9 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                 }
             }
             NodePath::Port(ci, ch) => {
-                let Some(p) = tree::port(snap, *ci, ch) else { continue };
+                let Some(p) = tree::port(snap, *ci, ch) else {
+                    continue;
+                };
                 if p.status.is_error() {
                     out.push(Insight {
                         severity: Severity::Error,
@@ -136,7 +115,7 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                     });
                 }
                 let Some(d) = &p.device else { continue };
-                if let Some(msg) = speed_mismatch(p, d) {
+                if let Some(msg) = crate::physical::explain_speed(snap, &phys, *ci, ch) {
                     out.push(Insight {
                         severity: Severity::Info,
                         node_id: n.id.clone(),
@@ -147,7 +126,11 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                 if let Some(i) = &d.info {
                     if i.has_problem() {
                         out.push(Insight {
-                            severity: if i.is_disabled() { Severity::Warning } else { Severity::Error },
+                            severity: if i.is_disabled() {
+                                Severity::Warning
+                            } else {
+                                Severity::Error
+                            },
                             node_id: n.id.clone(),
                             title: format!("{}: problem code {}", n.label, i.problem_code),
                             detail: problem_text(i.problem_code).into(),
@@ -158,7 +141,9 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                 let parent_hub = if ch.len() == 1 {
                     snap.controllers[*ci].root_hub.as_ref()
                 } else {
-                    tree::port(snap, *ci, &ch[..ch.len() - 1]).and_then(|pp| pp.device.as_ref()).and_then(|d| d.hub.as_deref())
+                    tree::port(snap, *ci, &ch[..ch.len() - 1])
+                        .and_then(|pp| pp.device.as_ref())
+                        .and_then(|d| d.hub.as_deref())
                 };
                 if let (Some(h), Some(ma)) = (parent_hub, d.max_power_ma()) {
                     let budget = port_budget_ma(h, p);
@@ -174,7 +159,11 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                 // BadUSB-style heuristic: a storage/network device that also exposes a keyboard.
                 let classes = d.interface_classes();
                 let has_hid = has_boot_keyboard(&d.config_descriptor);
-                if has_hid && (classes.contains(&0x08) || classes.contains(&0x02) || classes.contains(&0xE0)) {
+                if has_hid
+                    && (classes.contains(&0x08)
+                        || classes.contains(&0x02)
+                        || classes.contains(&0xE0))
+                {
                     out.push(Insight {
                         severity: Severity::Warning,
                         node_id: n.id.clone(),
@@ -191,11 +180,19 @@ pub fn analyze(snap: &Snapshot, flat: &Flat) -> Vec<Insight> {
                     });
                 }
                 let dd = crate::descriptors::decode_device(&d.device_descriptor, &|_| None);
-                let cd = crate::descriptors::decode_configuration(&d.config_descriptor, &|_| None, d.speed.is_super());
+                let cd = crate::descriptors::decode_configuration(
+                    &d.config_descriptor,
+                    &|_| None,
+                    d.speed.is_super(),
+                );
                 let warnings: Vec<String> = dd
                     .walk()
                     .into_iter()
-                    .chain(if d.config_descriptor.is_empty() { vec![] } else { cd.walk() })
+                    .chain(if d.config_descriptor.is_empty() {
+                        vec![]
+                    } else {
+                        cd.walk()
+                    })
                     .flat_map(|x| x.warnings.clone())
                     .collect();
                 if !warnings.is_empty() {
@@ -230,9 +227,19 @@ mod tests {
     #[test]
     fn demo_produces_expected_insights() {
         let s = crate::demo::snapshot();
-        let f = flatten(&s, &FlattenOptions { show_empty_ports: true, show_child_devices: true });
+        let f = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: true,
+                physical: false,
+            },
+        );
         let ins = analyze(&s, &f);
-        assert!(ins.iter().any(|i| i.title.contains("could be faster")), "{ins:#?}");
+        assert!(
+            ins.iter().any(|i| i.title.contains("could be faster")),
+            "{ins:#?}"
+        );
         assert!(ins.iter().any(|i| i.title.contains("problem code 43")));
         assert!(ins.iter().any(|i| i.title.contains("over-current")));
         // Sorted most severe first

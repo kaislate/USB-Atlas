@@ -93,29 +93,59 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 .fill(p.card)
                 .stroke(Stroke::new(1.0, p.border))
                 .corner_radius(CornerRadius::same(12))
-                .shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: egui::Color32::from_black_alpha(if p.dark { 120 } else { 40 }) })
+                .shadow(egui::Shadow {
+                    offset: [0, 6],
+                    blur: 20,
+                    spread: 0,
+                    color: egui::Color32::from_black_alpha(if p.dark { 120 } else { 40 }),
+                })
                 .inner_margin(egui::Margin::symmetric(14, 10))
                 .show(ui, |ui| {
                     ui.set_width(300.0);
                     ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
-                        ui.painter().rect_filled(r, CornerRadius::same(8), with_alpha(color, 0.16));
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icon, egui::FontId::proportional(17.0), color);
+                        let (r, _) =
+                            ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+                        ui.painter()
+                            .rect_filled(r, CornerRadius::same(8), with_alpha(color, 0.16));
+                        ui.painter().text(
+                            r.center(),
+                            Align2::CENTER_CENTER,
+                            icon,
+                            egui::FontId::proportional(17.0),
+                            color,
+                        );
                         ui.vertical(|ui| {
                             ui.label(RichText::new(&t.title).strong().color(p.text));
                             if !t.body.is_empty() {
-                                ui.add(egui::Label::new(RichText::new(&t.body).size(12.0).color(p.text_muted)).wrap());
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&t.body).size(12.0).color(p.text_muted),
+                                    )
+                                    .wrap(),
+                                );
                             }
                             if t.target.is_some() || t.open.is_some() {
-                                ui.label(RichText::new(if t.open.is_some() { "Click to open" } else { "Click to show" }).size(11.0).color(p.accent));
+                                ui.label(
+                                    RichText::new(if t.open.is_some() {
+                                        "Click to open"
+                                    } else {
+                                        "Click to show"
+                                    })
+                                    .size(11.0)
+                                    .color(p.accent),
+                                );
                             }
                         });
                     });
                     // Progress line
                     let r = ui.min_rect();
                     let frac = 1.0 - age / life;
-                    let line = egui::Rect::from_min_size(egui::pos2(r.left(), r.bottom() + 6.0), egui::vec2(r.width() * frac, 2.0));
-                    ui.painter().rect_filled(line, CornerRadius::same(1), with_alpha(color, 0.5));
+                    let line = egui::Rect::from_min_size(
+                        egui::pos2(r.left(), r.bottom() + 6.0),
+                        egui::vec2(r.width() * frac, 2.0),
+                    );
+                    ui.painter()
+                        .rect_filled(line, CornerRadius::same(1), with_alpha(color, 0.5));
                 })
         });
         let r = resp.response.interact(egui::Sense::click());

@@ -6,7 +6,15 @@ a fast, interactive UI and extended with diagnostics, snapshots and
 reporting. The name is a working title and is defined in one place:
 `APP_NAME` in `src/app/mod.rs`.
 
-![dark UI](docs/screenshot-dark.png)
+![Tree view – why a device is slow, with the link ladder and insights](docs/screenshots/tree.png)
+
+| Map view | USB guide – speed comparison |
+|---|---|
+| ![Animated map of physical sockets, lanes and links](docs/screenshots/map.png) | ![Animated speed graph of every USB generation](docs/screenshots/learn-speeds.png) |
+| **Guide – companion ports** | **Guide – versions & names decoder** |
+| ![Interactive companion-port diagram](docs/screenshots/learn-companion.png) | ![Decoder table of USB names and port markings](docs/screenshots/learn-names.png) |
+
+*All screenshots show the built-in demo data (`USB_Atlas --demo`).*
 
 ## Features
 
@@ -31,6 +39,23 @@ reporting. The name is a working title and is defined in one place:
 - Text reports (`--report`), command-line export, copy per node / whole tree
 
 **Beyond USBTreeView**
+- **Learn view** (Ctrl+3): an illustrated USB guide in 13 chapters – basics
+  (how USB works, connectors, port colors, power), a decoder for the naming
+  scheme (USB 3.0 = 3.1 Gen 1 = 3.2 Gen 1 = USB 5Gbps …), an animated speed
+  graph (log/linear) and file-copy race, an interactive companion-port
+  diagram, advanced topics (enumeration, transfer types, encoding, link power,
+  Type-C/PD/USB4, troubleshooting) and a personalized "Your computer" page
+- **Map view** (Ctrl+2): a full-width, animated graph of the physical topology.
+  Every USB 3 socket is one card showing both of its lanes (the USB 2 port and
+  its SuperSpeed "companion"), USB 3 hubs appear as one hub with two links,
+  and links flow at a pace and thickness matching their speed. Hover to trace
+  a path, click for an inspector, double-click to open details; a built-in
+  explainer covers companion ports
+- **Accurate "port max"**: speeds are judged per physical socket (all lanes),
+  plus the slowest upstream hub link, so a USB 3 device that fell back to the
+  USB 2 lane is reported as "could reach 5 Gbit/s here" with the likely cause
+- **Physical sockets tree mode**: optionally merge companion ports and hub
+  halves in the tree, too
 - **Insights**: explains *why* a device is slow (SuperSpeed device on a USB 2
   cable or port), power budget overruns, problem codes in plain English,
   descriptor spec violations, BadUSB-style warnings (keyboard + storage/network)
@@ -54,6 +79,8 @@ reporting. The name is a working title and is defined in one place:
 | Keys | Action |
 |---|---|
 | F5 / Ctrl+R | Refresh |
+| Ctrl+1 / 2 / 3 | Tree / Map / Learn view |
+| F, +, − (Map) | Fit, zoom in, zoom out |
 | Ctrl+K / Ctrl+P | Command palette |
 | Ctrl+F | Search |
 | ↑ ↓ ← → Home End PgUp PgDn | Navigate the tree |
@@ -69,12 +96,14 @@ reporting. The name is a working title and is defined in one place:
 ## Command line
 
 ```
-usbtree [snapshot.json]      open the GUI (optionally on a saved snapshot)
-usbtree --demo               GUI with built-in demo data
-usbtree --report [file]      text report (stdout if no file)
-usbtree --html <file>        HTML report
-usbtree --json [file]        JSON snapshot
-usbtree --no-hex             omit hex dumps from reports
+USB_Atlas [snapshot.json]      open the GUI (optionally on a saved snapshot)
+USB_Atlas --demo               GUI with built-in demo data
+USB_Atlas --report [file]      text report (stdout if no file)
+USB_Atlas --html <file>        HTML report
+USB_Atlas --json [file]        JSON snapshot
+USB_Atlas --no-hex             omit hex dumps from reports
+USB_Atlas --view <tree|map|learn>   start in a specific view
+USB_Atlas --lesson <name>      open a guide chapter (e.g. names, speeds, companion)
 ```
 
 ## Building
@@ -82,8 +111,9 @@ usbtree --no-hex             omit hex dumps from reports
 Requires Rust 1.92+ with the MSVC toolchain on Windows.
 
 ```
-cargo build --release       # target/release/usbtree.exe (single file, no installer)
+cargo build --release       # target/release/USB_Atlas.exe (single file, no installer)
 cargo test                  # descriptor decoding, tree, diff, insights, reports
+cargo test readme_screenshots -- --ignored   # re-render docs/screenshots offscreen
 ```
 
 Most information is available as a standard user. Restart, enable/disable and
@@ -96,6 +126,7 @@ cycle port need administrator rights ("Restart as administrator" in the menu).
 | `src/descriptors/` | Pure, tested USB descriptor decoders (field offsets for the hex view) |
 | `src/model.rs` | Serializable topology model = snapshot file format |
 | `src/platform/win/` | Win32: enumeration (usbview algorithm), devnodes, actions, notifications |
+| `src/physical.rs` | Companion-port grouping into sockets, hub-half merging, link limits |
 | `src/tree.rs` | Flattening into display nodes with stable ids, snapshot diffing |
 | `src/insights.rs` | Diagnostics heuristics |
 | `src/details.rs` | Detail sections shared by the UI, text and HTML reports |

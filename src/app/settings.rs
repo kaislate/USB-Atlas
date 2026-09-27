@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::theme::{Accent, ThemeMode};
+use super::theme::{Accent, LinkColors, ThemeMode};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -22,6 +22,12 @@ pub struct Settings {
     pub show_port_numbers: bool,
     pub confirm_actions: bool,
     pub always_on_top: bool,
+    pub map_view: bool,
+    pub map_motion: bool,
+    pub map_show_empty: bool,
+    pub map_legend: bool,
+    pub link_colors: LinkColors,
+    pub physical_tree: bool,
     pub tree_width: f32,
     /// Device nicknames keyed by `VID:PID:serial` (or `VID:PID@location`).
     pub nicknames: HashMap<String, String>,
@@ -43,6 +49,12 @@ impl Default for Settings {
             show_port_numbers: true,
             confirm_actions: true,
             always_on_top: false,
+            map_view: false,
+            map_motion: true,
+            map_show_empty: false,
+            map_legend: true,
+            link_colors: LinkColors::default(),
+            physical_tree: false,
             tree_width: 420.0,
             nicknames: HashMap::new(),
             pinned: Vec::new(),
@@ -51,7 +63,9 @@ impl Default for Settings {
 }
 
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
     Some(base.join(super::APP_NAME).join("settings.json"))
 }
 

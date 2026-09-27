@@ -21,13 +21,17 @@ struct Ctx {
 
 impl Ctx {
     fn devinfo_for_key(&self, key: &str, depth: u32) -> Option<DevInfo> {
-        self.keys.get(&key.to_uppercase()).map(|&dn| devnode::read(dn, depth))
+        self.keys
+            .get(&key.to_uppercase())
+            .map(|&dn| devnode::read(dn, depth))
     }
 }
 
 pub fn scan() -> Snapshot {
     let t0 = Instant::now();
-    let ctx = Ctx { keys: devnode::driver_key_map() };
+    let ctx = Ctx {
+        keys: devnode::driver_key_map(),
+    };
     let mut controllers = Vec::new();
     unsafe {
         if let Ok(h) = SetupDiGetClassDevsW(
@@ -38,7 +42,10 @@ pub fn scan() -> Snapshot {
         ) {
             let mut i = 0;
             loop {
-                let mut di = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+                let mut di = SP_DEVINFO_DATA {
+                    cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+                    ..Default::default()
+                };
                 if SetupDiEnumDeviceInfo(h, i, &mut di).is_err() {
                     break;
                 }
@@ -47,10 +54,20 @@ pub fn scan() -> Snapshot {
                     cbSize: std::mem::size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
                     ..Default::default()
                 };
-                if SetupDiEnumDeviceInterfaces(h, Some(&di), &GUID_DEVINTERFACE_USB_HOST_CONTROLLER, 0, &mut ifd).is_err() {
+                if SetupDiEnumDeviceInterfaces(
+                    h,
+                    Some(&di),
+                    &GUID_DEVINTERFACE_USB_HOST_CONTROLLER,
+                    0,
+                    &mut ifd,
+                )
+                .is_err()
+                {
                     continue;
                 }
-                let Some(path) = interface_path(h, &ifd) else { continue };
+                let Some(path) = interface_path(h, &ifd) else {
+                    continue;
+                };
                 controllers.push(controller(&ctx, di.DevInst, &path));
             }
             let _ = SetupDiDestroyDeviceInfoList(h);
@@ -103,7 +120,10 @@ fn flavor_name(f: u32) -> String {
 
 fn controller(ctx: &Ctx, devinst: u32, path: &str) -> Controller {
     let info = devnode::read(devinst, 0);
-    let mut c = Controller { info, ..Default::default() };
+    let mut c = Controller {
+        info,
+        ..Default::default()
+    };
     parse_pci_ids(&mut c);
     let h = match open_device(path) {
         Ok(h) => h,
@@ -138,7 +158,9 @@ fn controller(ctx: &Ctx, devinst: u32, path: &str) -> Controller {
 
 /// The root hub is the only child devnode of the controller.
 fn root_hub_info(ctrl_devinst: u32) -> Option<DevInfo> {
-    devnode::children(ctrl_devinst).first().map(|&dn| devnode::read(dn, 0))
+    devnode::children(ctrl_devinst)
+        .first()
+        .map(|&dn| devnode::read(dn, 0))
 }
 
 fn parse_pci_ids(c: &mut Controller) {
@@ -153,7 +175,11 @@ fn parse_pci_ids(c: &mut Controller) {
 }
 
 fn hub(ctx: &Ctx, name: &str, is_root: bool) -> Hub {
-    let mut hub = Hub { symbolic_name: name.to_string(), is_root, ..Default::default() };
+    let mut hub = Hub {
+        symbolic_name: name.to_string(),
+        is_root,
+        ..Default::default()
+    };
     let h = match open_device(&format!(r"\\.\{name}")) {
         Ok(h) => h,
         Err(e) => {
@@ -207,7 +233,10 @@ fn hub(ctx: &Ctx, name: &str, is_root: bool) -> Hub {
 }
 
 fn port(ctx: &Ctx, h: &Handle, idx: u32) -> Port {
-    let mut p = Port { index: idx, ..Default::default() };
+    let mut p = Port {
+        index: idx,
+        ..Default::default()
+    };
     let ix = idx.to_le_bytes();
 
     // Connector properties (companion ports, Type-C, user connectable)
@@ -300,7 +329,13 @@ fn port(ctx: &Ctx, h: &Handle, idx: u32) -> Port {
     // Driver key -> devnode
     let mut key_in = [0u8; 10];
     key_in[0..4].copy_from_slice(&ix);
-    if let Some(key) = ioctl_name(h, IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME, &key_in, 4, 8) {
+    if let Some(key) = ioctl_name(
+        h,
+        IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME,
+        &key_in,
+        4,
+        8,
+    ) {
         // A hub's child devnodes are the downstream devices, shown separately.
         dev.info = ctx.devinfo_for_key(&key, if dev.is_hub { 0 } else { 3 });
         dev.driver_key = key;
@@ -326,13 +361,26 @@ fn port(ctx: &Ctx, h: &Handle, idx: u32) -> Port {
 }
 
 /// GET_DESCRIPTOR via the hub driver. Returns the descriptor bytes.
-fn get_descriptor(h: &Handle, port: u32, dtype: u8, index: u8, lang: u16, len: u16) -> Option<Vec<u8>> {
+fn get_descriptor(
+    h: &Handle,
+    port: u32,
+    dtype: u8,
+    index: u8,
+    lang: u16,
+    len: u16,
+) -> Option<Vec<u8>> {
     let mut req = vec![0u8; 12];
     req[0..4].copy_from_slice(&port.to_le_bytes());
     req[6..8].copy_from_slice(&(((dtype as u16) << 8) | index as u16).to_le_bytes());
     req[8..10].copy_from_slice(&lang.to_le_bytes());
     req[10..12].copy_from_slice(&len.to_le_bytes());
-    let b = ioctl(h, IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION, &req, 12 + len as usize).ok()?;
+    let b = ioctl(
+        h,
+        IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
+        &req,
+        12 + len as usize,
+    )
+    .ok()?;
     if b.len() <= 12 {
         return None;
     }
@@ -340,7 +388,9 @@ fn get_descriptor(h: &Handle, port: u32, dtype: u8, index: u8, lang: u16, len: u
 }
 
 fn read_descriptors(h: &Handle, port: u32, dev: &mut Device) {
-    let Some(dd) = DeviceDescriptor::from_bytes(&dev.device_descriptor) else { return };
+    let Some(dd) = DeviceDescriptor::from_bytes(&dev.device_descriptor) else {
+        return;
+    };
 
     // Configuration descriptor (active one, index 0 is the only one in practice)
     if let Some(head) = get_descriptor(h, port, 2, 0, 0, 9) {
@@ -394,12 +444,20 @@ fn read_descriptors(h: &Handle, port: u32, dev: &mut Device) {
     if indexes.is_empty() {
         return;
     }
-    let Some(l0) = get_descriptor(h, port, 3, 0, 0, 255) else { return };
+    let Some(l0) = get_descriptor(h, port, 3, 0, 0, 255) else {
+        return;
+    };
     dev.lang_ids = decode_langids(&l0);
     for &lang in dev.lang_ids.iter().take(4) {
         for &i in &indexes {
-            if let Some(s) = get_descriptor(h, port, 3, i, lang, 255).and_then(|d| decode_string(&d)) {
-                dev.strings.push(StringDesc { index: i, lang, text: s });
+            if let Some(s) =
+                get_descriptor(h, port, 3, i, lang, 255).and_then(|d| decode_string(&d))
+            {
+                dev.strings.push(StringDesc {
+                    index: i,
+                    lang,
+                    text: s,
+                });
             }
         }
     }

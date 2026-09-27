@@ -25,7 +25,11 @@ fn reg_string(value: PCWSTR) -> String {
             Some(buf.as_mut_ptr() as *mut _),
             Some(&mut size),
         );
-        if r.is_ok() { from_wide(&buf) } else { String::new() }
+        if r.is_ok() {
+            from_wide(&buf)
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -43,7 +47,9 @@ pub fn computer_info() -> ComputerInfo {
     let display = reg_string(w!("DisplayVersion"));
     ComputerInfo {
         name: std::env::var("COMPUTERNAME").unwrap_or_default(),
-        os: format!("{product} {display} (build {build})").trim().to_string(),
+        os: format!("{product} {display} (build {build})")
+            .trim()
+            .to_string(),
         user: std::env::var("USERNAME").unwrap_or_default(),
         is_admin: is_admin(),
     }
@@ -52,9 +58,20 @@ pub fn computer_info() -> ComputerInfo {
 fn shell(verb: &str, file: &str, params: &str) -> Result<(), String> {
     let (v, f, p) = (wide(verb), wide(file), wide(params));
     let r = unsafe {
-        ShellExecuteW(None, PCWSTR(v.as_ptr()), PCWSTR(f.as_ptr()), PCWSTR(p.as_ptr()), PCWSTR::null(), SW_SHOWNORMAL)
+        ShellExecuteW(
+            None,
+            PCWSTR(v.as_ptr()),
+            PCWSTR(f.as_ptr()),
+            PCWSTR(p.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
     };
-    if r.0 as isize > 32 { Ok(()) } else { Err(format!("ShellExecute failed ({})", r.0 as isize)) }
+    if r.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecute failed ({})", r.0 as isize))
+    }
 }
 
 /// Restarts this program elevated; the caller should exit on success.
@@ -68,7 +85,11 @@ pub fn open_path(path: &str) -> Result<(), String> {
 }
 
 pub fn open_device_properties(instance_id: &str) -> Result<(), String> {
-    shell("open", "rundll32.exe", &format!("devmgr.dll,DeviceProperties_RunDLL /DeviceID \"{instance_id}\""))
+    shell(
+        "open",
+        "rundll32.exe",
+        &format!("devmgr.dll,DeviceProperties_RunDLL /DeviceID \"{instance_id}\""),
+    )
 }
 
 pub fn open_device_manager() -> Result<(), String> {

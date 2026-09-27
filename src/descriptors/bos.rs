@@ -37,14 +37,18 @@ pub fn decode_bos(b: &[u8]) -> DescNode {
     let mut node = r.finish();
     if let Some(t) = total {
         if t as usize != b.len() {
-            node.warnings.push(format!("wTotalLength is {t} but {} bytes were returned", b.len()));
+            node.warnings.push(format!(
+                "wTotalLength is {t} but {} bytes were returned",
+                b.len()
+            ));
         }
     }
     let mut pos = hlen.max(2);
     while pos + 3 <= b.len() {
         let len = b[pos] as usize;
         if len < 3 {
-            node.warnings.push(format!("Invalid capability length {len} at offset {pos}"));
+            node.warnings
+                .push(format!("Invalid capability length {len} at offset {pos}"));
             break;
         }
         let end = (pos + len).min(b.len());
@@ -58,32 +62,63 @@ fn decode_capability(d: &[u8], base: usize) -> DescNode {
     let cap = d.get(2).copied().unwrap_or(0);
     let mut r = Reader::new(d, base, capability_name(cap), DescKind::DeviceCapability);
     header(&mut r, 0x10);
-    r.hex_note("bDevCapabilityType", 1, |v| capability_name(v as u8).to_string());
+    r.hex_note("bDevCapabilityType", 1, |v| {
+        capability_name(v as u8).to_string()
+    });
     match cap {
         0x02 => {
             r.num("bmAttributes", 4, |v| {
                 let mut p = Vec::new();
-                if v & 0x2 != 0 { p.push("LPM") }
-                if v & 0x4 != 0 { p.push("BESL & alternate HIRD") }
-                if v & 0x8 != 0 { p.push("baseline BESL valid") }
-                if v & 0x10 != 0 { p.push("deep BESL valid") }
-                format!("0x{v:08X} ({})", if p.is_empty() { "none".into() } else { p.join(", ") })
+                if v & 0x2 != 0 {
+                    p.push("LPM")
+                }
+                if v & 0x4 != 0 {
+                    p.push("BESL & alternate HIRD")
+                }
+                if v & 0x8 != 0 {
+                    p.push("baseline BESL valid")
+                }
+                if v & 0x10 != 0 {
+                    p.push("deep BESL valid")
+                }
+                format!(
+                    "0x{v:08X} ({})",
+                    if p.is_empty() {
+                        "none".into()
+                    } else {
+                        p.join(", ")
+                    }
+                )
             });
         }
         0x03 => {
             r.num("bmAttributes", 1, |v| {
-                format!("0x{v:02X} ({})", if v & 2 != 0 { "LTM capable" } else { "no LTM" })
+                format!(
+                    "0x{v:02X} ({})",
+                    if v & 2 != 0 { "LTM capable" } else { "no LTM" }
+                )
             });
             r.num("wSpeedsSupported", 2, |v| {
                 let mut p = Vec::new();
-                if v & 1 != 0 { p.push("Low") }
-                if v & 2 != 0 { p.push("Full") }
-                if v & 4 != 0 { p.push("High") }
-                if v & 8 != 0 { p.push("5 Gbps") }
+                if v & 1 != 0 {
+                    p.push("Low")
+                }
+                if v & 2 != 0 {
+                    p.push("Full")
+                }
+                if v & 4 != 0 {
+                    p.push("High")
+                }
+                if v & 8 != 0 {
+                    p.push("5 Gbps")
+                }
                 format!("0x{v:04X} ({})", p.join(", "))
             });
             r.num("bFunctionalitySupport", 1, |v| {
-                let s = ["Low Speed", "Full Speed", "High Speed", "SuperSpeed"].get(v as usize).copied().unwrap_or("?");
+                let s = ["Low Speed", "Full Speed", "High Speed", "SuperSpeed"]
+                    .get(v as usize)
+                    .copied()
+                    .unwrap_or("?");
                 format!("0x{v:02X} (lowest fully functional: {s})")
             });
             r.num("bU1DevExitLat", 1, |v| format!("{v} µs"));
@@ -133,9 +168,20 @@ fn decode_capability(d: &[u8], base: usize) -> DescNode {
                     let exp = ["b/s", "Kb/s", "Mb/s", "Gb/s"][((v >> 4) & 3) as usize];
                     let mantissa = v >> 16;
                     let dir = if (v >> 6) & 1 == 1 { "Tx" } else { "Rx" };
-                    let mode = if (v >> 7) & 1 == 1 { "asymmetric" } else { "symmetric" };
-                    let proto = if (v >> 14) & 3 == 1 { "SuperSpeedPlus" } else { "SuperSpeed" };
-                    format!("0x{v:08X} (ID {}, {mantissa} {exp}, {mode} {dir}, {proto})", v & 0xF)
+                    let mode = if (v >> 7) & 1 == 1 {
+                        "asymmetric"
+                    } else {
+                        "symmetric"
+                    };
+                    let proto = if (v >> 14) & 3 == 1 {
+                        "SuperSpeedPlus"
+                    } else {
+                        "SuperSpeed"
+                    };
+                    format!(
+                        "0x{v:08X} (ID {}, {mantissa} {exp}, {mode} {dir}, {proto})",
+                        v & 0xF
+                    )
                 });
             }
         }

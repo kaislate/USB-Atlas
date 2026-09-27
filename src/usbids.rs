@@ -51,19 +51,24 @@ impl UsbIds {
             match tabs {
                 0 => {
                     if let Some(rest) = body.strip_prefix("C ") {
-                        if let Some((id, name)) = split(rest).and_then(|(i, n)| Some((hex8(i)?, n))) {
+                        if let Some((id, name)) = split(rest).and_then(|(i, n)| Some((hex8(i)?, n)))
+                        {
                             ids.classes.insert((id, None, None), name.to_string());
                             sec = Section::Class(id, None);
                             continue;
                         }
                     } else if let Some(rest) = body.strip_prefix("L ") {
-                        if let Some((id, name)) = split(rest).and_then(|(i, n)| Some((hex16(i)?, n))) {
+                        if let Some((id, name)) =
+                            split(rest).and_then(|(i, n)| Some((hex16(i)?, n)))
+                        {
                             ids.langs.insert(id, name.to_string());
                         }
                         sec = Section::Lang;
                         continue;
                     }
-                    match split(body).and_then(|(i, n)| Some((hex16(i).filter(|_| i.len() == 4)?, n))) {
+                    match split(body)
+                        .and_then(|(i, n)| Some((hex16(i).filter(|_| i.len() == 4)?, n)))
+                    {
                         Some((vid, name)) => {
                             ids.vendors.insert(vid, (name.to_string(), HashMap::new()));
                             sec = Section::Vendor(vid);
@@ -73,14 +78,18 @@ impl UsbIds {
                 }
                 1 => match sec {
                     Section::Vendor(vid) => {
-                        if let Some((pid, name)) = split(body).and_then(|(i, n)| Some((hex16(i)?, n))) {
+                        if let Some((pid, name)) =
+                            split(body).and_then(|(i, n)| Some((hex16(i)?, n)))
+                        {
                             if let Some(v) = ids.vendors.get_mut(&vid) {
                                 v.1.insert(pid, name.to_string());
                             }
                         }
                     }
                     Section::Class(c, _) => {
-                        if let Some((sub, name)) = split(body).and_then(|(i, n)| Some((hex8(i)?, n))) {
+                        if let Some((sub, name)) =
+                            split(body).and_then(|(i, n)| Some((hex8(i)?, n)))
+                        {
                             ids.classes.insert((c, Some(sub), None), name.to_string());
                             sec = Section::Class(c, Some(sub));
                         }
@@ -89,8 +98,10 @@ impl UsbIds {
                 },
                 2 => {
                     if let Section::Class(c, Some(sub)) = sec {
-                        if let Some((p, name)) = split(body).and_then(|(i, n)| Some((hex8(i)?, n))) {
-                            ids.classes.insert((c, Some(sub), Some(p)), name.to_string());
+                        if let Some((p, name)) = split(body).and_then(|(i, n)| Some((hex8(i)?, n)))
+                        {
+                            ids.classes
+                                .insert((c, Some(sub), Some(p)), name.to_string());
                         }
                     }
                 }

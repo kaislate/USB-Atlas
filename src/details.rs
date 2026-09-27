@@ -26,23 +26,41 @@ pub struct Section {
 
 impl Section {
     fn new(id: &'static str, title: impl Into<String>) -> Self {
-        Self { id, title: title.into(), rows: vec![], desc: None, raw: None }
+        Self {
+            id,
+            title: title.into(),
+            rows: vec![],
+            desc: None,
+            raw: None,
+        }
     }
 
     fn row(&mut self, k: &str, v: impl Into<String>) {
         let v = v.into();
         if !v.is_empty() {
-            self.rows.push(Row { key: k.into(), value: v, flag: None });
+            self.rows.push(Row {
+                key: k.into(),
+                value: v,
+                flag: None,
+            });
         }
     }
 
     fn flag(&mut self, k: &str, v: impl Into<String>, s: insights::Severity) {
-        self.rows.push(Row { key: k.into(), value: v.into(), flag: Some(s) });
+        self.rows.push(Row {
+            key: k.into(),
+            value: v.into(),
+            flag: Some(s),
+        });
     }
 }
 
 fn yes(b: bool) -> String {
-    if b { "yes".into() } else { "no".into() }
+    if b {
+        "yes".into()
+    } else {
+        "no".into()
+    }
 }
 
 pub fn human_bytes(b: u64) -> String {
@@ -53,7 +71,11 @@ pub fn human_bytes(b: u64) -> String {
         v /= 1000.0;
         i += 1;
     }
-    if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
+    if i == 0 {
+        format!("{b} B")
+    } else {
+        format!("{v:.1} {}", U[i])
+    }
 }
 
 pub fn devinfo_section(title: &str, i: &DevInfo) -> Section {
@@ -72,9 +94,15 @@ pub fn devinfo_section(title: &str, i: &DevInfo) -> Section {
     s.row("Driver Key", &i.driver_key);
     s.row("Driver", {
         let mut d = Vec::new();
-        if !i.driver_provider.is_empty() { d.push(i.driver_provider.clone()) }
-        if !i.driver_version.is_empty() { d.push(format!("v{}", i.driver_version)) }
-        if !i.driver_date.is_empty() { d.push(i.driver_date.clone()) }
+        if !i.driver_provider.is_empty() {
+            d.push(i.driver_provider.clone())
+        }
+        if !i.driver_version.is_empty() {
+            d.push(format!("v{}", i.driver_version))
+        }
+        if !i.driver_date.is_empty() {
+            d.push(i.driver_date.clone())
+        }
         d.join(" · ")
     });
     s.row("Driver INF", &i.driver_inf);
@@ -90,8 +118,16 @@ pub fn devinfo_section(title: &str, i: &DevInfo) -> Section {
         s.row("Status Flags", format!("0x{:08X}", i.status_flags));
     }
     if i.problem_code != 0 {
-        let sev = if i.is_disabled() { insights::Severity::Warning } else { insights::Severity::Error };
-        s.flag("Problem Code", format!("{} – {}", i.problem_code, problem_text(i.problem_code)), sev);
+        let sev = if i.is_disabled() {
+            insights::Severity::Warning
+        } else {
+            insights::Severity::Error
+        };
+        s.flag(
+            "Problem Code",
+            format!("{} – {}", i.problem_code, problem_text(i.problem_code)),
+            sev,
+        );
     } else {
         s.row("Problem Code", "0 (working properly)");
     }
@@ -101,7 +137,11 @@ pub fn devinfo_section(title: &str, i: &DevInfo) -> Section {
 fn volume_rows(s: &mut Section, v: &Volume) {
     let m = v.mount_points.join(", ");
     let used = v.total_bytes.saturating_sub(v.free_bytes);
-    let label = if v.label.is_empty() { "(no label)".to_string() } else { v.label.clone() };
+    let label = if v.label.is_empty() {
+        "(no label)".to_string()
+    } else {
+        v.label.clone()
+    };
     s.row(
         if m.is_empty() { "Volume" } else { &m },
         format!(
@@ -127,7 +167,10 @@ pub fn sections(snap: &Snapshot, path: &NodePath) -> Vec<Section> {
             None => vec![],
         },
         NodePath::Child(ci, ch, cc) => {
-            let Some(info) = tree::port(snap, *ci, ch).and_then(|p| p.device.as_ref()).and_then(|d| d.info.as_ref()) else {
+            let Some(info) = tree::port(snap, *ci, ch)
+                .and_then(|p| p.device.as_ref())
+                .and_then(|d| d.info.as_ref())
+            else {
                 return vec![];
             };
             match tree::child(info, cc) {
@@ -190,7 +233,17 @@ fn controller(c: &Controller) -> Vec<Section> {
     s.row("Type", c.kind());
     if let Some(v) = c.pci_vendor {
         let vn = pci_vendor_name(v);
-        s.row("PCI Vendor", format!("0x{v:04X}{}", if vn.is_empty() { String::new() } else { format!(" ({vn})") }));
+        s.row(
+            "PCI Vendor",
+            format!(
+                "0x{v:04X}{}",
+                if vn.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({vn})")
+                }
+            ),
+        );
     }
     if let Some(d) = c.pci_device {
         s.row("PCI Device", format!("0x{d:04X}"));
@@ -225,10 +278,24 @@ fn pci_vendor_name(v: u16) -> &'static str {
 }
 
 fn hub_sections(h: &Hub) -> Vec<Section> {
-    let mut s = Section::new("hub", if h.is_root { "Root Hub" } else { "Hub Information" });
+    let mut s = Section::new(
+        "hub",
+        if h.is_root {
+            "Root Hub"
+        } else {
+            "Hub Information"
+        },
+    );
     s.row("Hub Type", &h.hub_type);
     s.row("Ports", h.num_ports.to_string());
-    s.row("Power", if h.bus_powered { "Bus-powered (100 mA per port)" } else { "Self-powered" });
+    s.row(
+        "Power",
+        if h.bus_powered {
+            "Bus-powered (100 mA per port)"
+        } else {
+            "Self-powered"
+        },
+    );
     s.row("High-Speed Capable", yes(h.high_speed_capable));
     s.row("Multi-TT", yes(h.multi_tt));
     s.row("Symbolic Name", &h.symbolic_name);
@@ -256,16 +323,65 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
     ps.row("Port Chain", tree::port_chain(snap, ci, ch));
     ps.row("Port Number", p.index.to_string());
     if p.status.is_error() {
-        ps.flag("Connection Status", p.status.label(), insights::Severity::Error);
+        ps.flag(
+            "Connection Status",
+            p.status.label(),
+            insights::Severity::Error,
+        );
     } else {
         ps.row("Connection Status", p.status.label());
     }
     let mut protos = Vec::new();
-    if p.supports_usb110 { protos.push("USB 1.1") }
-    if p.supports_usb200 { protos.push("USB 2.0") }
-    if p.supports_usb300 { protos.push("USB 3.x") }
+    if p.supports_usb110 {
+        protos.push("USB 1.1")
+    }
+    if p.supports_usb200 {
+        protos.push("USB 2.0")
+    }
+    if p.supports_usb300 {
+        protos.push("USB 3.x")
+    }
     ps.row("Supported Protocols", protos.join(", "));
-    ps.row("Max Port Speed", p.max_speed().label());
+    ps.row("Lane Max Speed", crate::physical::lane_max(p).label());
+    let phys = crate::physical::Physical::build(snap);
+    let li = crate::physical::link_info(snap, &phys, ci, ch);
+    if let Some(li) = &li {
+        if li.lanes.len() > 1 {
+            let lanes: Vec<String> = phys
+                .lanes_of(&(ci, ch.to_vec()))
+                .iter()
+                .filter_map(|r| tree::port(snap, r.0, &r.1))
+                .map(|lp| {
+                    format!(
+                        "Port {} ({})",
+                        lp.index,
+                        if lp.supports_usb300 {
+                            "SuperSpeed lane"
+                        } else {
+                            "USB 2 lane"
+                        }
+                    )
+                })
+                .collect();
+            ps.row(
+                "Physical Connector",
+                format!(
+                    "{} – one socket, {} logical ports",
+                    if li.connector_max.is_super() {
+                        "USB 3 socket"
+                    } else {
+                        "USB 2 socket"
+                    },
+                    li.lanes.len()
+                ),
+            );
+            ps.row("Lanes", lanes.join("\n"));
+        }
+        ps.row("Connector Max Speed", li.connector_max.label());
+        if let Some((s, hub)) = &li.path_limit {
+            ps.row("Upstream Limit", format!("{} (via \"{hub}\")", s.label()));
+        }
+    }
     if let Some(c) = &p.connector {
         ps.row("User Connectable", yes(c.user_connectable));
         ps.row("Type-C Connector", yes(c.type_c));
@@ -274,7 +390,11 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
             let hub = hub_display_name(snap, &c.companion_hub);
             ps.row(
                 "Companion Port",
-                format!("Port {}{}", c.companion_port, hub.map(|h| format!(" on {h}")).unwrap_or_default()),
+                format!(
+                    "Port {}{}",
+                    c.companion_port,
+                    hub.map(|h| format!(" on {h}")).unwrap_or_default()
+                ),
             );
         }
         if c.multi_companions {
@@ -292,20 +412,64 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
     let dd = d.descriptor();
     if let Some(dd) = dd {
         let db = usbids::db();
-        sum.row("Vendor", format!("0x{:04X}{}", dd.vid, db.vendor(dd.vid).map(|n| format!(" – {n}")).unwrap_or_default()));
-        sum.row("Product", format!("0x{:04X}{}", dd.pid, db.product(dd.vid, dd.pid).map(|n| format!(" – {n}")).unwrap_or_default()));
-        sum.row("Manufacturer String", d.string(dd.i_manufacturer).unwrap_or(""));
+        sum.row(
+            "Vendor",
+            format!(
+                "0x{:04X}{}",
+                dd.vid,
+                db.vendor(dd.vid)
+                    .map(|n| format!(" – {n}"))
+                    .unwrap_or_default()
+            ),
+        );
+        sum.row(
+            "Product",
+            format!(
+                "0x{:04X}{}",
+                dd.pid,
+                db.product(dd.vid, dd.pid)
+                    .map(|n| format!(" – {n}"))
+                    .unwrap_or_default()
+            ),
+        );
+        sum.row(
+            "Manufacturer String",
+            d.string(dd.i_manufacturer).unwrap_or(""),
+        );
         sum.row("Product String", d.string(dd.i_product).unwrap_or(""));
         sum.row("Serial Number", d.string(dd.i_serial).unwrap_or(""));
         sum.row("USB Version", usb_version_label(dd.bcd_usb));
     }
-    sum.row("Port Maximum Speed", p.max_speed().label());
+    let phys = crate::physical::Physical::build(snap);
+    let li = crate::physical::link_info(snap, &phys, ci, ch);
+    if let Some(li) = &li {
+        sum.row("Connector Maximum Speed", li.connector_max.label());
+        if li.on_slow_lane && d.max_capable_speed().is_super() {
+            sum.row(
+                "Current Lane",
+                format!("USB 2 lane ({})", li.lane_max.label()),
+            );
+        }
+        if let Some((s, hub)) = &li.path_limit {
+            if *s < li.connector_max {
+                sum.flag(
+                    "Upstream Limit",
+                    format!("{} – \"{hub}\"", s.label()),
+                    insights::Severity::Info,
+                );
+            }
+        }
+    }
     if let Some(dd) = dd {
         let _ = dd;
         sum.row("Device Maximum Speed", d.max_capable_speed().label());
     }
-    match insights::speed_mismatch(p, d) {
-        Some(m) => sum.flag("Connection Speed", format!("{}\n{m}", d.speed.label()), insights::Severity::Info),
+    match crate::physical::explain_speed(snap, &phys, ci, ch) {
+        Some(m) => sum.flag(
+            "Connection Speed",
+            format!("{}\n{m}", d.speed.label()),
+            insights::Severity::Info,
+        ),
         None => sum.row("Connection Speed", d.speed.label()),
     }
     if let Some(sp) = d.self_powered() {
@@ -320,14 +484,22 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
             "Functions",
             classes
                 .iter()
-                .map(|c| usbids::db().class(*c, None, None).unwrap_or(descriptors::class_name(*c)))
+                .map(|c| {
+                    usbids::db()
+                        .class(*c, None, None)
+                        .unwrap_or(descriptors::class_name(*c))
+                })
                 .collect::<Vec<_>>()
                 .join(", "),
         );
     }
     if let Some(i) = &d.info {
         if i.problem_code != 0 {
-            sum.flag("Problem", format!("{} – {}", i.problem_code, problem_text(i.problem_code)), insights::Severity::Error);
+            sum.flag(
+                "Problem",
+                format!("{} – {}", i.problem_code, problem_text(i.problem_code)),
+                insights::Severity::Error,
+            );
         }
         let vols = i.all_volumes();
         for v in vols {
@@ -346,7 +518,10 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
     conn.row("Current Config Value", d.current_config.to_string());
     conn.row("Open Pipes", d.open_pipes.to_string());
     conn.row("Is Hub", yes(d.is_hub));
-    conn.row("Operating at SuperSpeed or higher", yes(d.operating_at_ss_or_higher));
+    conn.row(
+        "Operating at SuperSpeed or higher",
+        yes(d.operating_at_ss_or_higher),
+    );
     conn.row("SuperSpeed Capable", yes(d.ss_capable));
     conn.row("Operating at SuperSpeedPlus", yes(d.operating_at_ssp));
     conn.row("SuperSpeedPlus Capable", yes(d.ssp_capable));
@@ -355,7 +530,11 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
             &format!("Pipe 0x{:02X}", pi.endpoint_address),
             format!(
                 "{} {} · {} bytes · interval {}",
-                if pi.endpoint_address & 0x80 != 0 { "IN" } else { "OUT" },
+                if pi.endpoint_address & 0x80 != 0 {
+                    "IN"
+                } else {
+                    "OUT"
+                },
                 descriptors::transfer_type(pi.attributes),
                 pi.max_packet,
                 pi.interval
@@ -394,7 +573,11 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
     }
     if !d.config_descriptor.is_empty() {
         let mut s = Section::new("config", "Configuration Descriptor");
-        s.desc = Some(descriptors::decode_configuration(&d.config_descriptor, &lookup, d.speed.is_super()));
+        s.desc = Some(descriptors::decode_configuration(
+            &d.config_descriptor,
+            &lookup,
+            d.speed.is_super(),
+        ));
         s.raw = Some(d.config_descriptor.clone());
         out.push(s);
     }
@@ -420,13 +603,21 @@ fn port_sections(snap: &Snapshot, ci: usize, ch: &[usize], p: &Port) -> Vec<Sect
                 "Language IDs",
                 d.lang_ids
                     .iter()
-                    .map(|l| format!("0x{l:04X} ({})", usbids::db().language(*l).unwrap_or(lang_name(*l))))
+                    .map(|l| {
+                        format!(
+                            "0x{l:04X} ({})",
+                            usbids::db().language(*l).unwrap_or(lang_name(*l))
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", "),
             );
         }
         for st in &d.strings {
-            s.row(&format!("String {} (0x{:04X})", st.index, st.lang), format!("\"{}\"", st.text));
+            s.row(
+                &format!("String {} (0x{:04X})", st.index, st.lang),
+                format!("\"{}\"", st.text),
+            );
         }
         out.push(s);
     }
@@ -476,7 +667,11 @@ pub fn usb_version_label(bcd: u16) -> String {
         0x0320 => "USB 3.2 – up to 20 Gbit/s",
         _ => "",
     };
-    if note.is_empty() { format!("0x{bcd:04X} ({v})") } else { format!("0x{bcd:04X} ({note})") }
+    if note.is_empty() {
+        format!("0x{bcd:04X} ({v})")
+    } else {
+        format!("0x{bcd:04X} ({note})")
+    }
 }
 
 /// Renders sections as a plain-text report block.
@@ -485,7 +680,13 @@ pub fn to_text(title: &str, secs: &[Section], hexdumps: bool) -> String {
     out += &format!("{}\n{}\n", title, "=".repeat(title.chars().count().max(8)));
     for s in secs {
         out += &format!("\n---------------- {} ----------------\n", s.title);
-        let w = s.rows.iter().map(|r| r.key.chars().count()).max().unwrap_or(0).max(24);
+        let w = s
+            .rows
+            .iter()
+            .map(|r| r.key.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(24);
         for r in &s.rows {
             let mut lines = r.value.lines();
             let mark = match r.flag {
@@ -530,7 +731,16 @@ pub fn hexdump(b: &[u8]) -> String {
     let mut out = String::new();
     for (i, chunk) in b.chunks(16).enumerate() {
         let hex: Vec<String> = chunk.iter().map(|x| format!("{x:02X}")).collect();
-        let ascii: String = chunk.iter().map(|&c| if (0x20..0x7F).contains(&c) { c as char } else { '.' }).collect();
+        let ascii: String = chunk
+            .iter()
+            .map(|&c| {
+                if (0x20..0x7F).contains(&c) {
+                    c as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
         out += &format!("{:04X}  {:<48} {}\n", i * 16, hex.join(" "), ascii);
     }
     out
@@ -538,14 +748,31 @@ pub fn hexdump(b: &[u8]) -> String {
 
 /// Full text report of a snapshot: tree overview followed by every node.
 pub fn full_report(snap: &Snapshot, hexdumps: bool) -> String {
-    let flat = tree::flatten(snap, &tree::FlattenOptions { show_empty_ports: true, show_child_devices: false });
+    let flat = tree::flatten(
+        snap,
+        &tree::FlattenOptions {
+            show_empty_ports: true,
+            show_child_devices: false,
+            physical: false,
+        },
+    );
     let mut out = format!(
         "USB topology report – {} – {}\n\n",
         snap.computer.name, snap.taken_at
     );
     for n in &flat.nodes {
-        let port = if n.port_label.is_empty() { String::new() } else { format!("[{}] ", n.port_label) };
-        out += &format!("{}{}{}  {}\n", "  ".repeat(n.depth), port, n.label, n.detail);
+        let port = if n.port_label.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", n.port_label)
+        };
+        out += &format!(
+            "{}{}{}  {}\n",
+            "  ".repeat(n.depth),
+            port,
+            n.label,
+            n.detail
+        );
     }
     out += "\n";
     for n in &flat.nodes {
@@ -565,7 +792,14 @@ mod tests {
     #[test]
     fn every_demo_node_has_sections_and_report_renders() {
         let s = crate::demo::snapshot();
-        let f = tree::flatten(&s, &tree::FlattenOptions { show_empty_ports: true, show_child_devices: true });
+        let f = tree::flatten(
+            &s,
+            &tree::FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: true,
+                physical: false,
+            },
+        );
         for n in &f.nodes {
             assert!(!sections(&s, &n.path).is_empty(), "{}", n.id);
         }
@@ -578,15 +812,32 @@ mod tests {
     #[test]
     fn demo_good_devices_decode_without_warnings() {
         let s = crate::demo::snapshot();
-        let f = tree::flatten(&s, &tree::FlattenOptions { show_empty_ports: false, show_child_devices: false });
+        let f = tree::flatten(
+            &s,
+            &tree::FlattenOptions {
+                show_empty_ports: false,
+                show_child_devices: false,
+                physical: false,
+            },
+        );
         for n in &f.nodes {
             if let NodePath::Port(ci, ch) = &n.path {
-                let Some(d) = tree::port(&s, *ci, ch).unwrap().device.as_ref() else { continue };
+                let Some(d) = tree::port(&s, *ci, ch).unwrap().device.as_ref() else {
+                    continue;
+                };
                 if d.info.as_ref().is_some_and(|i| i.problem_code != 0) {
                     continue;
                 }
-                let c = descriptors::decode_configuration(&d.config_descriptor, &|_| None, d.speed.is_super());
-                let w: Vec<_> = c.walk().into_iter().flat_map(|x| x.warnings.clone()).collect();
+                let c = descriptors::decode_configuration(
+                    &d.config_descriptor,
+                    &|_| None,
+                    d.speed.is_super(),
+                );
+                let w: Vec<_> = c
+                    .walk()
+                    .into_iter()
+                    .flat_map(|x| x.warnings.clone())
+                    .collect();
                 assert!(w.is_empty(), "{}: {w:?}", n.label);
             }
         }

@@ -6,7 +6,8 @@ fn no_strings(_: u8) -> Option<String> {
 
 // Logitech USB receiver style device descriptor.
 const DEVICE: [u8; 18] = [
-    0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x6D, 0x04, 0x2B, 0xC5, 0x03, 0x12, 0x01, 0x02, 0x00, 0x01,
+    0x12, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x6D, 0x04, 0x2B, 0xC5, 0x03, 0x12, 0x01, 0x02,
+    0x00, 0x01,
 ];
 
 #[test]
@@ -20,12 +21,21 @@ fn device_descriptor_roundtrip() {
 
 #[test]
 fn decode_device_fields_have_offsets() {
-    let lookup = |i: u8| if i == 2 { Some("USB Receiver".to_string()) } else { None };
+    let lookup = |i: u8| {
+        if i == 2 {
+            Some("USB Receiver".to_string())
+        } else {
+            None
+        }
+    };
     let n = decode_device(&DEVICE, &lookup);
     let vid = n.field("idVendor").unwrap();
     assert_eq!((vid.offset, vid.size, vid.value), (8, 2, 0x046D));
     assert_eq!(n.field("bcdUSB").unwrap().display, "0x0200 (USB 2.00)");
-    assert_eq!(n.field("iProduct").unwrap().display, "0x02 (\"USB Receiver\")");
+    assert_eq!(
+        n.field("iProduct").unwrap().display,
+        "0x02 (\"USB Receiver\")"
+    );
     assert!(n.warnings.is_empty());
 }
 
@@ -91,9 +101,14 @@ fn wrong_total_length_warns() {
 
 #[test]
 fn zero_length_descriptor_does_not_loop() {
-    let c = [0x09, 0x02, 0x0B, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32, 0x00, 0x04];
+    let c = [
+        0x09, 0x02, 0x0B, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32, 0x00, 0x04,
+    ];
     let n = decode_configuration(&c, &no_strings, false);
-    assert!(n.warnings.iter().any(|w| w.contains("Invalid descriptor length")));
+    assert!(n
+        .warnings
+        .iter()
+        .any(|w| w.contains("Invalid descriptor length")));
 }
 
 #[test]
@@ -108,7 +123,10 @@ fn ss_companion_attaches_to_endpoint() {
     let ep = &n.children[0].children[0];
     assert_eq!(ep.kind, DescKind::Endpoint);
     assert_eq!(ep.children[0].kind, DescKind::SsEndpointCompanion);
-    assert_eq!(ep.children[0].field("bMaxBurst").unwrap().display, "15 (16 packets per burst)");
+    assert_eq!(
+        ep.children[0].field("bMaxBurst").unwrap().display,
+        "15 (16 packets per burst)"
+    );
 }
 
 #[test]
@@ -125,8 +143,16 @@ fn bos_with_usb2ext_ss_and_container_id() {
     assert!(n.warnings.is_empty(), "{:?}", n.warnings);
     assert_eq!(n.children.len(), 3);
     assert_eq!(n.children[0].title, "USB 2.0 Extension");
-    assert!(n.children[0].field("bmAttributes").unwrap().display.contains("LPM"));
-    assert!(n.children[1].field("wSpeedsSupported").unwrap().display.contains("5 Gbps"));
+    assert!(n.children[0]
+        .field("bmAttributes")
+        .unwrap()
+        .display
+        .contains("LPM"));
+    assert!(n.children[1]
+        .field("wSpeedsSupported")
+        .unwrap()
+        .display
+        .contains("5 Gbps"));
     assert_eq!(
         n.children[2].field("ContainerID").unwrap().display,
         "{03020100-0504-0706-0809-0A0B0C0D0E0F}"
@@ -147,5 +173,9 @@ fn hub_descriptor() {
     let n = decode_hub(&h);
     assert_eq!(n.field("bNumberOfPorts").unwrap().value, 4);
     assert_eq!(n.field("bPwrOn2PwrGood").unwrap().display, "50 (100 ms)");
-    assert!(n.field("wHubCharacteristics").unwrap().display.contains("individual port power"));
+    assert!(n
+        .field("wHubCharacteristics")
+        .unwrap()
+        .display
+        .contains("individual port power"));
 }

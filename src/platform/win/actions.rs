@@ -65,7 +65,11 @@ pub fn safely_remove(instance_id: &str) -> Result<String, String> {
         Err(format!(
             "Windows refused to eject the device because of {}.{}",
             veto_reason(veto.0),
-            if who.is_empty() { String::new() } else { format!("\nVetoed by: {who}") }
+            if who.is_empty() {
+                String::new()
+            } else {
+                format!("\nVetoed by: {who}")
+            }
         ))
     } else {
         Err(cr_err("Eject", cr))
@@ -74,9 +78,20 @@ pub fn safely_remove(instance_id: &str) -> Result<String, String> {
 
 pub fn set_enabled(instance_id: &str, enable: bool) -> Result<String, String> {
     let dn = devnode::locate(instance_id).ok_or("Device not found")?;
-    let cr = unsafe { if enable { CM_Enable_DevNode(dn, 0) } else { CM_Disable_DevNode(dn, CM_DISABLE_UI_NOT_OK) } };
+    let cr = unsafe {
+        if enable {
+            CM_Enable_DevNode(dn, 0)
+        } else {
+            CM_Disable_DevNode(dn, CM_DISABLE_UI_NOT_OK)
+        }
+    };
     if cr == CR_SUCCESS {
-        Ok(if enable { "Device enabled." } else { "Device disabled." }.into())
+        Ok(if enable {
+            "Device enabled."
+        } else {
+            "Device disabled."
+        }
+        .into())
     } else {
         Err(cr_err(if enable { "Enable" } else { "Disable" }, cr))
     }
@@ -87,9 +102,13 @@ pub fn restart(instance_id: &str) -> Result<String, String> {
     unsafe {
         let h = SetupDiCreateDeviceInfoList(None, None).map_err(|e| e.to_string())?;
         let id = wide(instance_id);
-        let mut di = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+        let mut di = SP_DEVINFO_DATA {
+            cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
         let res = (|| {
-            SetupDiOpenDeviceInfoW(h, PCWSTR(id.as_ptr()), None, 0, Some(&mut di)).map_err(|e| e.to_string())?;
+            SetupDiOpenDeviceInfoW(h, PCWSTR(id.as_ptr()), None, 0, Some(&mut di))
+                .map_err(|e| e.to_string())?;
             let params = SP_PROPCHANGE_PARAMS {
                 ClassInstallHeader: SP_CLASSINSTALL_HEADER {
                     cbSize: std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as u32,
@@ -122,7 +141,8 @@ pub fn restart(instance_id: &str) -> Result<String, String> {
 
 /// Power-cycles a hub port (the device re-enumerates). Needs admin.
 pub fn cycle_port(hub_symbolic_name: &str, port: u32) -> Result<String, String> {
-    let h = open_device(&format!(r"\\.\{hub_symbolic_name}")).map_err(|e| format!("Cannot open hub: {e}"))?;
+    let h = open_device(&format!(r"\\.\{hub_symbolic_name}"))
+        .map_err(|e| format!("Cannot open hub: {e}"))?;
     let mut buf = [0u8; 8];
     buf[0..4].copy_from_slice(&port.to_le_bytes());
     match ioctl(&h, IOCTL_USB_HUB_CYCLE_PORT, &buf, 8) {

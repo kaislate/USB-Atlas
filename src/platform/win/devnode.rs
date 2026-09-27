@@ -7,7 +7,8 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::*;
 use windows::Win32::Devices::Properties::*;
 use windows::Win32::Foundation::DEVPROPKEY;
 use windows::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, GetVolumePathNamesForVolumeNameW,
+    GetDiskFreeSpaceExW, GetVolumeInformationW, GetVolumeNameForVolumeMountPointW,
+    GetVolumePathNamesForVolumeNameW,
 };
 use windows::Win32::System::Ioctl::GUID_DEVINTERFACE_VOLUME;
 use windows::Win32::System::Registry::{RegCloseKey, RegQueryValueExW, HKEY, KEY_READ};
@@ -40,7 +41,9 @@ fn prop_raw(dn: u32, key: &DEVPROPKEY) -> Option<(u32, Vec<u8>)> {
 }
 
 fn to_u16(b: &[u8]) -> Vec<u16> {
-    b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+    b.chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect()
 }
 
 fn guid_string(b: &[u8]) -> String {
@@ -78,7 +81,9 @@ fn prop_list(dn: u32, key: &DEVPROPKEY) -> Vec<String> {
 
 fn prop_u32(dn: u32, key: &DEVPROPKEY) -> Option<u32> {
     match prop_raw(dn, key) {
-        Some((DEVPROP_TYPE_UINT32_, b)) if b.len() >= 4 => Some(u32::from_le_bytes(b[..4].try_into().unwrap())),
+        Some((DEVPROP_TYPE_UINT32_, b)) if b.len() >= 4 => {
+            Some(u32::from_le_bytes(b[..4].try_into().unwrap()))
+        }
         _ => None,
     }
 }
@@ -141,15 +146,34 @@ pub fn status(dn: u32) -> (u32, u32) {
 fn com_port(dn: u32) -> String {
     unsafe {
         let mut key = HKEY::default();
-        if CM_Open_DevNode_Key(dn, KEY_READ.0, 0, RegDisposition_OpenExisting, &mut key, CM_REGISTRY_HARDWARE) != CR_SUCCESS {
+        if CM_Open_DevNode_Key(
+            dn,
+            KEY_READ.0,
+            0,
+            RegDisposition_OpenExisting,
+            &mut key,
+            CM_REGISTRY_HARDWARE,
+        ) != CR_SUCCESS
+        {
             return String::new();
         }
         let name = wide("PortName");
         let mut buf = [0u16; 64];
         let mut size = (buf.len() * 2) as u32;
-        let r = RegQueryValueExW(key, PCWSTR(name.as_ptr()), None, None, Some(buf.as_mut_ptr() as *mut u8), Some(&mut size));
+        let r = RegQueryValueExW(
+            key,
+            PCWSTR(name.as_ptr()),
+            None,
+            None,
+            Some(buf.as_mut_ptr() as *mut u8),
+            Some(&mut size),
+        );
         let _ = RegCloseKey(key);
-        if r.is_ok() { from_wide(&buf) } else { String::new() }
+        if r.is_ok() {
+            from_wide(&buf)
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -157,7 +181,9 @@ fn id_list(filter_id: &str, flags: u32) -> Vec<String> {
     let w = wide(filter_id);
     unsafe {
         let mut len = 0u32;
-        if CM_Get_Device_ID_List_SizeW(&mut len, PCWSTR(w.as_ptr()), flags) != CR_SUCCESS || len == 0 {
+        if CM_Get_Device_ID_List_SizeW(&mut len, PCWSTR(w.as_ptr()), flags) != CR_SUCCESS
+            || len == 0
+        {
             return vec![];
         }
         let mut buf = vec![0u16; len as usize];
@@ -172,15 +198,23 @@ fn interface_list(guid: &GUID, device_id: &str) -> Vec<String> {
     let w = wide(device_id);
     unsafe {
         let mut len = 0u32;
-        if CM_Get_Device_Interface_List_SizeW(&mut len, guid, PCWSTR(w.as_ptr()), CM_GET_DEVICE_INTERFACE_LIST_PRESENT)
-            != CR_SUCCESS
+        if CM_Get_Device_Interface_List_SizeW(
+            &mut len,
+            guid,
+            PCWSTR(w.as_ptr()),
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        ) != CR_SUCCESS
             || len <= 1
         {
             return vec![];
         }
         let mut buf = vec![0u16; len as usize];
-        if CM_Get_Device_Interface_ListW(guid, PCWSTR(w.as_ptr()), &mut buf, CM_GET_DEVICE_INTERFACE_LIST_PRESENT)
-            != CR_SUCCESS
+        if CM_Get_Device_Interface_ListW(
+            guid,
+            PCWSTR(w.as_ptr()),
+            &mut buf,
+            CM_GET_DEVICE_INTERFACE_LIST_PRESENT,
+        ) != CR_SUCCESS
         {
             return vec![];
         }
@@ -215,7 +249,8 @@ fn volume_info(interface_path: &str) -> Option<Volume> {
     let mut paths = [0u16; 1024];
     let mut len = 0u32;
     let mount_points = unsafe {
-        if GetVolumePathNamesForVolumeNameW(PCWSTR(wn.as_ptr()), Some(&mut paths), &mut len).is_ok() {
+        if GetVolumePathNamesForVolumeNameW(PCWSTR(wn.as_ptr()), Some(&mut paths), &mut len).is_ok()
+        {
             multi_sz(&paths[..(len as usize).min(paths.len())])
         } else {
             vec![]
@@ -225,7 +260,14 @@ fn volume_info(interface_path: &str) -> Option<Volume> {
     let mut fs = [0u16; 261];
     let (mut free, mut total) = (0u64, 0u64);
     unsafe {
-        let _ = GetVolumeInformationW(PCWSTR(wn.as_ptr()), Some(&mut label), None, None, None, Some(&mut fs));
+        let _ = GetVolumeInformationW(
+            PCWSTR(wn.as_ptr()),
+            Some(&mut label),
+            None,
+            None,
+            None,
+            Some(&mut fs),
+        );
         let _ = GetDiskFreeSpaceExW(PCWSTR(wn.as_ptr()), None, Some(&mut total), Some(&mut free));
     }
     Some(Volume {
@@ -265,7 +307,11 @@ pub fn read(dn: u32, depth: u32) -> DevInfo {
         upper_filters: prop_list(dn, &DEVPKEY_Device_UpperFilters),
         lower_filters: prop_list(dn, &DEVPKEY_Device_LowerFilters),
         enumerator: prop_string(dn, &DEVPKEY_Device_EnumeratorName),
-        problem_code: if st & DN_HAS_PROBLEM.0 != 0 { prob } else { prop_u32(dn, &DEVPKEY_Device_ProblemCode).unwrap_or(0) },
+        problem_code: if st & DN_HAS_PROBLEM.0 != 0 {
+            prob
+        } else {
+            prop_u32(dn, &DEVPKEY_Device_ProblemCode).unwrap_or(0)
+        },
         status_flags: st,
         power_state: String::new(),
         instance_id: id.clone(),
@@ -279,7 +325,10 @@ pub fn read(dn: u32, depth: u32) -> DevInfo {
         info.volumes = volumes_of(&id);
     }
     if depth > 0 {
-        info.children = children(dn).into_iter().map(|c| read(c, depth - 1)).collect();
+        info.children = children(dn)
+            .into_iter()
+            .map(|c| read(c, depth - 1))
+            .collect();
     }
     info
 }
@@ -288,19 +337,33 @@ pub fn read(dn: u32, depth: u32) -> DevInfo {
 pub fn driver_key_map() -> HashMap<String, u32> {
     let mut map = HashMap::new();
     unsafe {
-        let Ok(h) = SetupDiGetClassDevsW(None, PCWSTR::null(), None, DIGCF_ALLCLASSES | DIGCF_PRESENT) else {
+        let Ok(h) =
+            SetupDiGetClassDevsW(None, PCWSTR::null(), None, DIGCF_ALLCLASSES | DIGCF_PRESENT)
+        else {
             return map;
         };
         let mut i = 0;
         loop {
-            let mut di = SP_DEVINFO_DATA { cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+            let mut di = SP_DEVINFO_DATA {
+                cbSize: std::mem::size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
             if SetupDiEnumDeviceInfo(h, i, &mut di).is_err() {
                 break;
             }
             i += 1;
             let mut buf = [0u8; 512];
             let mut req = 0u32;
-            if SetupDiGetDeviceRegistryPropertyW(h, &di, SPDRP_DRIVER, None, Some(&mut buf), Some(&mut req)).is_ok() {
+            if SetupDiGetDeviceRegistryPropertyW(
+                h,
+                &di,
+                SPDRP_DRIVER,
+                None,
+                Some(&mut buf),
+                Some(&mut req),
+            )
+            .is_ok()
+            {
                 let key = from_wide(&to_u16(&buf[..(req as usize).min(buf.len())]));
                 if !key.is_empty() {
                     map.insert(key.to_uppercase(), di.DevInst);

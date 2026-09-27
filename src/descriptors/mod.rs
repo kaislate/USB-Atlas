@@ -96,7 +96,12 @@ pub(crate) struct Reader<'a> {
 impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8], base: usize, title: impl Into<String>, kind: DescKind) -> Self {
         let len = data.len();
-        Self { data, base, pos: 0, node: DescNode::new(title, kind, base, len) }
+        Self {
+            data,
+            base,
+            pos: 0,
+            node: DescNode::new(title, kind, base, len),
+        }
     }
 
     pub fn remaining(&self) -> usize {
@@ -118,7 +123,9 @@ impl<'a> Reader<'a> {
     /// `fmt` renders the display string from the value.
     pub fn num(&mut self, name: &str, size: usize, fmt: impl FnOnce(u64) -> String) -> Option<u64> {
         let Some(v) = self.raw(size) else {
-            self.node.warnings.push(format!("Descriptor truncated before {name}"));
+            self.node
+                .warnings
+                .push(format!("Descriptor truncated before {name}"));
             self.pos = self.data.len();
             return None;
         };
@@ -137,10 +144,19 @@ impl<'a> Reader<'a> {
         self.num(name, size, |v| hex_n(v, size))
     }
 
-    pub fn hex_note(&mut self, name: &str, size: usize, note: impl FnOnce(u64) -> String) -> Option<u64> {
+    pub fn hex_note(
+        &mut self,
+        name: &str,
+        size: usize,
+        note: impl FnOnce(u64) -> String,
+    ) -> Option<u64> {
         self.num(name, size, |v| {
             let n = note(v);
-            if n.is_empty() { hex_n(v, size) } else { format!("{} ({n})", hex_n(v, size)) }
+            if n.is_empty() {
+                hex_n(v, size)
+            } else {
+                format!("{} ({n})", hex_n(v, size))
+            }
         })
     }
 
@@ -149,9 +165,16 @@ impl<'a> Reader<'a> {
     }
 
     /// Records a run of bytes (e.g. a UUID) as a single field.
-    pub fn bytes(&mut self, name: &str, size: usize, fmt: impl FnOnce(&[u8]) -> String) -> Option<&'a [u8]> {
+    pub fn bytes(
+        &mut self,
+        name: &str,
+        size: usize,
+        fmt: impl FnOnce(&[u8]) -> String,
+    ) -> Option<&'a [u8]> {
         if self.pos + size > self.data.len() {
-            self.node.warnings.push(format!("Descriptor truncated before {name}"));
+            self.node
+                .warnings
+                .push(format!("Descriptor truncated before {name}"));
             self.pos = self.data.len();
             return None;
         }
@@ -185,7 +208,10 @@ pub fn hex_n(v: u64, size: usize) -> String {
 }
 
 pub fn hex_bytes(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02X}")).collect::<Vec<_>>().join(" ")
+    b.iter()
+        .map(|x| format!("{x:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn bcd(v: u64) -> String {
@@ -207,7 +233,11 @@ fn header(r: &mut Reader, expected: u8) {
     r.dec("bLength", 1);
     r.hex_note("bDescriptorType", 1, |v| {
         let n = descriptor_type_name(v as u8);
-        if v as u8 != expected && expected != 0 { format!("{n} – unexpected") } else { n.to_string() }
+        if v as u8 != expected && expected != 0 {
+            format!("{n} – unexpected")
+        } else {
+            n.to_string()
+        }
     });
 }
 
@@ -315,7 +345,11 @@ pub fn decode_device(b: &[u8], strings: StringLookup) -> DescNode {
     header(&mut r, 0x01);
     r.num("bcdUSB", 2, |v| format!("0x{v:04X} (USB {})", bcd(v)));
     let class = r.hex_note("bDeviceClass", 1, |v| {
-        if v == 0 { "defined by interface".into() } else { class_name(v as u8).to_string() }
+        if v == 0 {
+            "defined by interface".into()
+        } else {
+            class_name(v as u8).to_string()
+        }
     });
     r.hex("bDeviceSubClass", 1);
     r.hex("bDeviceProtocol", 1);
@@ -329,13 +363,18 @@ pub fn decode_device(b: &[u8], strings: StringLookup) -> DescNode {
     r.dec("bNumConfigurations", 1);
     let mut node = r.finish();
     if b.len() >= 2 && b[0] != 18 {
-        node.warnings.push(format!("bLength is {} but a device descriptor is 18 bytes", b[0]));
+        node.warnings.push(format!(
+            "bLength is {} but a device descriptor is 18 bytes",
+            b[0]
+        ));
     }
     if vid == Some(0) {
-        node.warnings.push("idVendor is 0x0000 – the device probably failed enumeration".into());
+        node.warnings
+            .push("idVendor is 0x0000 – the device probably failed enumeration".into());
     }
     if class == Some(0xEF) && b.len() >= 7 && (b[5] != 0x02 || b[6] != 0x01) {
-        node.warnings.push("Class 0xEF should use SubClass 0x02 / Protocol 0x01 (IAD)".into());
+        node.warnings
+            .push("Class 0xEF should use SubClass 0x02 / Protocol 0x01 (IAD)".into());
     }
     node
 }
@@ -349,8 +388,15 @@ struct IfaceCtx {
 }
 
 pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) -> DescNode {
-    let clen = (b.first().copied().unwrap_or(9) as usize).clamp(2, b.len().max(2)).min(b.len());
-    let mut r = Reader::new(&b[..clen], 0, "Configuration Descriptor", DescKind::Configuration);
+    let clen = (b.first().copied().unwrap_or(9) as usize)
+        .clamp(2, b.len().max(2))
+        .min(b.len());
+    let mut r = Reader::new(
+        &b[..clen],
+        0,
+        "Configuration Descriptor",
+        DescKind::Configuration,
+    );
     header(&mut r, 0x02);
     let total = r.num("wTotalLength", 2, |v| format!("0x{v:04X} ({v} bytes)"));
     r.dec("bNumInterfaces", 1);
@@ -358,12 +404,20 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
     r.hex_note("iConfiguration", 1, |v| string_note(strings, v));
     r.num("bmAttributes", 1, |v| {
         let mut parts = Vec::new();
-        if v & 0x40 != 0 { parts.push("Self-powered") } else { parts.push("Bus-powered") }
-        if v & 0x20 != 0 { parts.push("Remote Wakeup") }
+        if v & 0x40 != 0 {
+            parts.push("Self-powered")
+        } else {
+            parts.push("Bus-powered")
+        }
+        if v & 0x20 != 0 {
+            parts.push("Remote Wakeup")
+        }
         format!("0x{v:02X} ({})", parts.join(", "))
     });
     let unit = if super_speed { 8 } else { 2 };
-    r.num("MaxPower", 1, move |v| format!("0x{v:02X} ({} mA)", v * unit));
+    r.num("MaxPower", 1, move |v| {
+        format!("0x{v:02X} ({} mA)", v * unit)
+    });
     let mut config = r.finish();
 
     if let Some(t) = total {
@@ -376,7 +430,9 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
     }
     if let Some(a) = config.field("bmAttributes") {
         if a.value & 0x80 == 0 {
-            config.warnings.push("bmAttributes bit 7 must be set (USB 1.1+)".into());
+            config
+                .warnings
+                .push("bmAttributes bit 7 must be set (USB 1.1+)".into());
         }
     }
 
@@ -402,12 +458,16 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
         let len = b[pos] as usize;
         let typ = b[pos + 1];
         if len < 2 {
-            config.warnings.push(format!("Invalid descriptor length {len} at offset {pos}"));
+            config
+                .warnings
+                .push(format!("Invalid descriptor length {len} at offset {pos}"));
             break;
         }
         let end = (pos + len).min(b.len());
         if pos + len > b.len() {
-            config.warnings.push(format!("Descriptor at offset {pos} runs past the end of the data"));
+            config.warnings.push(format!(
+                "Descriptor at offset {pos} runs past the end of the data"
+            ));
         }
         let d = &b[pos..end];
         match typ {
@@ -442,10 +502,17 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
                 }
             }
             0x30 | 0x31 => {
-                let n = if typ == 0x30 { decode_ss_companion(d, pos) } else { decode_ssp_isoc_companion(d, pos) };
+                let n = if typ == 0x30 {
+                    decode_ss_companion(d, pos)
+                } else {
+                    decode_ssp_isoc_companion(d, pos)
+                };
                 // Attach to the last endpoint of the current interface.
                 let target = cur_iface.as_mut().and_then(|i| {
-                    i.children.iter_mut().rev().find(|c| c.kind == DescKind::Endpoint)
+                    i.children
+                        .iter_mut()
+                        .rev()
+                        .find(|c| c.kind == DescKind::Endpoint)
                 });
                 match target {
                     Some(ep) => ep.children.push(n),
@@ -458,7 +525,12 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
                     Some(i) => {
                         // Class-specific endpoint descriptors follow their endpoint.
                         if typ == 0x25 {
-                            if let Some(ep) = i.children.iter_mut().rev().find(|c| c.kind == DescKind::Endpoint) {
+                            if let Some(ep) = i
+                                .children
+                                .iter_mut()
+                                .rev()
+                                .find(|c| c.kind == DescKind::Endpoint)
+                            {
                                 ep.children.push(n);
                             } else {
                                 i.children.push(n);
@@ -478,7 +550,12 @@ pub fn decode_configuration(b: &[u8], strings: StringLookup, super_speed: bool) 
 }
 
 fn decode_iad(d: &[u8], base: usize, strings: StringLookup) -> DescNode {
-    let mut r = Reader::new(d, base, "Interface Association", DescKind::InterfaceAssociation);
+    let mut r = Reader::new(
+        d,
+        base,
+        "Interface Association",
+        DescKind::InterfaceAssociation,
+    );
     header(&mut r, 0x0B);
     r.dec("bFirstInterface", 1);
     r.dec("bInterfaceCount", 1);
@@ -499,8 +576,14 @@ fn decode_interface(d: &[u8], base: usize, strings: StringLookup) -> DescNode {
     let num = r.dec("bInterfaceNumber", 1).unwrap_or(0);
     let alt = r.dec("bAlternateSetting", 1).unwrap_or(0);
     r.dec("bNumEndpoints", 1);
-    let class = r.hex_note("bInterfaceClass", 1, |v| class_name(v as u8).to_string()).unwrap_or(0);
-    let sub = r.hex_note("bInterfaceSubClass", 1, |v| names::subclass_name(d.get(5).copied().unwrap_or(0), v as u8)).unwrap_or(0);
+    let class = r
+        .hex_note("bInterfaceClass", 1, |v| class_name(v as u8).to_string())
+        .unwrap_or(0);
+    let sub = r
+        .hex_note("bInterfaceSubClass", 1, |v| {
+            names::subclass_name(d.get(5).copied().unwrap_or(0), v as u8)
+        })
+        .unwrap_or(0);
     r.hex_note("bInterfaceProtocol", 1, |v| {
         names::protocol_name(d.get(5).copied().unwrap_or(0), sub as u8, v as u8)
     });
@@ -529,7 +612,11 @@ fn decode_endpoint(d: &[u8], base: usize, _iface_class: u8) -> DescNode {
     header(&mut r, 0x05);
     let addr = r
         .num("bEndpointAddress", 1, |v| {
-            format!("0x{v:02X} ({} {})", if v & 0x80 != 0 { "IN" } else { "OUT" }, v & 0x0F)
+            format!(
+                "0x{v:02X} ({} {})",
+                if v & 0x80 != 0 { "IN" } else { "OUT" },
+                v & 0x0F
+            )
         })
         .unwrap_or(0);
     let attr = r
@@ -537,8 +624,10 @@ fn decode_endpoint(d: &[u8], base: usize, _iface_class: u8) -> DescNode {
             let tt = transfer_type(v as u8);
             let mut s = format!("0x{v:02X} ({tt}");
             if v & 3 == 1 {
-                let sync = ["No Sync", "Asynchronous", "Adaptive", "Synchronous"][((v >> 2) & 3) as usize];
-                let usage = ["Data", "Feedback", "Implicit Feedback Data", "Reserved"][((v >> 4) & 3) as usize];
+                let sync =
+                    ["No Sync", "Asynchronous", "Adaptive", "Synchronous"][((v >> 2) & 3) as usize];
+                let usage = ["Data", "Feedback", "Implicit Feedback Data", "Reserved"]
+                    [((v >> 4) & 3) as usize];
                 s += &format!(", {sync}, {usage}");
             } else if v & 3 == 3 && (v >> 4) & 3 == 1 {
                 s += ", Notification";
@@ -550,17 +639,19 @@ fn decode_endpoint(d: &[u8], base: usize, _iface_class: u8) -> DescNode {
         let size = v & 0x7FF;
         let mult = (v >> 11) & 3;
         if mult > 0 {
-            format!("0x{v:04X} ({} x {size} bytes = {} bytes)", mult + 1, (mult + 1) * size)
+            format!(
+                "0x{v:04X} ({} x {size} bytes = {} bytes)",
+                mult + 1,
+                (mult + 1) * size
+            )
         } else {
             format!("0x{v:04X} ({size} bytes)")
         }
     });
-    r.num("bInterval", 1, |v| {
-        match attr & 3 {
-            2 => format!("0x{v:02X} (ignored for bulk / NAK rate)"),
-            1 | 3 => format!("0x{v:02X} ({v})"),
-            _ => format!("0x{v:02X}"),
-        }
+    r.num("bInterval", 1, |v| match attr & 3 {
+        2 => format!("0x{v:02X} (ignored for bulk / NAK rate)"),
+        1 | 3 => format!("0x{v:02X} ({v})"),
+        _ => format!("0x{v:02X}"),
     });
     r.rest("extra");
     let mut n = r.finish();
@@ -573,16 +664,28 @@ fn decode_endpoint(d: &[u8], base: usize, _iface_class: u8) -> DescNode {
 }
 
 fn decode_ss_companion(d: &[u8], base: usize) -> DescNode {
-    let mut r = Reader::new(d, base, "SuperSpeed Endpoint Companion", DescKind::SsEndpointCompanion);
+    let mut r = Reader::new(
+        d,
+        base,
+        "SuperSpeed Endpoint Companion",
+        DescKind::SsEndpointCompanion,
+    );
     header(&mut r, 0x30);
-    r.num("bMaxBurst", 1, |v| format!("{v} ({} packets per burst)", v + 1));
+    r.num("bMaxBurst", 1, |v| {
+        format!("{v} ({} packets per burst)", v + 1)
+    });
     r.hex("bmAttributes", 1);
     r.num("wBytesPerInterval", 2, |v| format!("{v} bytes"));
     r.finish()
 }
 
 fn decode_ssp_isoc_companion(d: &[u8], base: usize) -> DescNode {
-    let mut r = Reader::new(d, base, "SuperSpeedPlus Isoch Endpoint Companion", DescKind::SspIsocCompanion);
+    let mut r = Reader::new(
+        d,
+        base,
+        "SuperSpeedPlus Isoch Endpoint Companion",
+        DescKind::SspIsocCompanion,
+    );
     header(&mut r, 0x31);
     r.hex("wReserved", 2);
     r.num("dwBytesPerInterval", 4, |v| format!("{v} bytes"));
@@ -607,7 +710,16 @@ pub fn decode_device_qualifier(d: &[u8]) -> DescNode {
 /// Decodes a USB 2.0 (0x29) or SuperSpeed (0x2A) hub descriptor.
 pub fn decode_hub(d: &[u8]) -> DescNode {
     let ss = d.get(1) == Some(&0x2A);
-    let mut r = Reader::new(d, 0, if ss { "SuperSpeed Hub Descriptor" } else { "Hub Descriptor" }, DescKind::Hub);
+    let mut r = Reader::new(
+        d,
+        0,
+        if ss {
+            "SuperSpeed Hub Descriptor"
+        } else {
+            "Hub Descriptor"
+        },
+        DescKind::Hub,
+    );
     header(&mut r, if ss { 0x2A } else { 0x29 });
     r.dec("bNumberOfPorts", 1);
     r.num("wHubCharacteristics", 2, |v| {
@@ -632,7 +744,13 @@ pub fn decode_hub(d: &[u8]) -> DescNode {
         s + ")"
     });
     r.num("bPwrOn2PwrGood", 1, |v| format!("{v} ({} ms)", v * 2));
-    r.num("bHubContrCurrent", 1, |v| if ss { format!("{} mA", v * 4) } else { format!("{v} mA") });
+    r.num("bHubContrCurrent", 1, |v| {
+        if ss {
+            format!("{} mA", v * 4)
+        } else {
+            format!("{v} mA")
+        }
+    });
     if ss {
         r.hex("bHubHdrDecLat", 1);
         r.num("wHubDelay", 2, |v| format!("{v} ns"));
@@ -649,8 +767,15 @@ pub fn decode_string(d: &[u8]) -> Option<String> {
         return None;
     }
     let len = (d[0] as usize).min(d.len());
-    let units: Vec<u16> = d[2..len].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-    Some(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string())
+    let units: Vec<u16> = d[2..len]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    Some(
+        String::from_utf16_lossy(&units)
+            .trim_end_matches('\0')
+            .to_string(),
+    )
 }
 
 /// Decodes string descriptor 0 (supported language IDs).
@@ -659,5 +784,8 @@ pub fn decode_langids(d: &[u8]) -> Vec<u16> {
         return Vec::new();
     }
     let len = (d[0] as usize).min(d.len());
-    d[2..len].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
+    d[2..len]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect()
 }

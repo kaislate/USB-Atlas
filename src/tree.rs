@@ -119,10 +119,13 @@ fn ctrl_id(c: &Controller, i: usize) -> String {
 pub struct FlattenOptions {
     pub show_empty_ports: bool,
     pub show_child_devices: bool,
+    /// Merge companion ports into physical sockets and USB 3 hub halves into one hub.
+    pub physical: bool,
 }
 
 pub fn flatten(snap: &Snapshot, opts: &FlattenOptions) -> Flat {
     let mut f = Flat::default();
+    let phys = crate::physical::Physical::build(snap);
     let comp = push(
         &mut f,
         FlatNode {
@@ -131,7 +134,11 @@ pub fn flatten(snap: &Snapshot, opts: &FlattenOptions) -> Flat {
             depth: 0,
             kind: NodeKind::Computer,
             path: NodePath::Computer,
-            label: if snap.computer.name.is_empty() { "This Computer".into() } else { snap.computer.name.clone() },
+            label: if snap.computer.name.is_empty() {
+                "This Computer".into()
+            } else {
+                snap.computer.name.clone()
+            },
             detail: snap.computer.os.clone(),
             port_label: String::new(),
             speed: Speed::Unknown,
@@ -144,7 +151,11 @@ pub fn flatten(snap: &Snapshot, opts: &FlattenOptions) -> Flat {
     );
     for (ci, c) in snap.controllers.iter().enumerate() {
         let cid = ctrl_id(c, ci);
-        let health = if c.info.has_problem() || c.error.is_some() { Health::Error } else { Health::Ok };
+        let health = if c.info.has_problem() || c.error.is_some() {
+            Health::Error
+        } else {
+            Health::Ok
+        };
         let mut detail = c.kind().to_string();
         if let (Some(v), Some(d)) = (c.pci_vendor, c.pci_device) {
             detail = format!("{detail} · PCI {v:04X}:{d:04X}");
@@ -182,13 +193,23 @@ pub fn flatten(snap: &Snapshot, opts: &FlattenOptions) -> Flat {
                     port_label: String::new(),
                     speed: Speed::Unknown,
                     port_max_speed: Speed::Unknown,
-                    health: if rh.error.is_some() { Health::Warning } else { Health::Ok },
+                    health: if rh.error.is_some() {
+                        Health::Warning
+                    } else {
+                        Health::Ok
+                    },
                     classes: vec![0x09],
                     children: vec![],
                     search_text: search_blob(&["root hub", &rh.symbolic_name]),
                 },
             );
-            add_ports(&mut f, snap, opts, rn, 3, ci, &cid, vec![], rh);
+            if opts.physical {
+                if let Some(pc) = phys.controllers.iter().find(|pc| pc.ci == ci) {
+                    add_sockets(&mut f, snap, &phys, opts, rn, 3, &pc.connectors);
+                }
+            } else {
+                add_ports(&mut f, snap, &phys, opts, rn, 3, ci, &cid, vec![], rh);
+            }
         }
     }
     f
@@ -205,13 +226,27 @@ fn push(f: &mut Flat, n: FlatNode) -> usize {
 }
 
 fn search_blob(parts: &[&str]) -> String {
-    parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ").to_lowercase()
+    parts
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Physical-view overrides for a row that stands for a whole socket.
+struct SocketLabel {
+    port_label: String,
+    note: String,
+    max: Speed,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn add_ports(
     f: &mut Flat,
     snap: &Snapshot,
+    phys: &crate::physical::Physical,
     opts: &FlattenOptions,
     parent: usize,
     depth: usize,
@@ -223,130 +258,266 @@ fn add_ports(
     for (pi, p) in hub.ports.iter().enumerate() {
         let mut ch = chain.clone();
         ch.push(pi);
-        let pchain = port_chain(snap, ci, &ch);
-        let id = format!("{cid}/{pchain}");
-        let port_label = format!("Port {}", p.index);
-        let Some(dev) = &p.device else {
-            if !opts.show_empty_ports && !p.status.is_error() {
-                continue;
-            }
-            let health = if p.status.is_error() { Health::Error } else { Health::Empty };
-            let label = if p.status.is_error() { p.status.label() } else { "Empty".into() };
-            let mut tags = Vec::new();
-            if p.connector.as_ref().is_some_and(|c| c.type_c) {
-                tags.push("Type-C");
-            }
-            if p.connector.as_ref().is_some_and(|c| !c.user_connectable) {
-                tags.push("internal");
-            }
-            let detail = tags.join(" · ");
-            push(
-                f,
-                FlatNode {
-                    id,
-                    parent: Some(parent),
-                    depth,
-                    kind: NodeKind::EmptyPort,
-                    path: NodePath::Port(ci, ch),
-                    search_text: search_blob(&[&label, &port_label, &pchain]),
-                    label,
-                    detail,
-                    port_label,
-                    speed: Speed::Unknown,
-                    port_max_speed: p.max_speed(),
-                    health,
-                    classes: vec![],
-                    children: vec![],
-                },
-            );
+        let Some(dn) = port_node(f, snap, phys, opts, parent, depth, ci, cid, &ch, p, None) else {
             continue;
         };
-        let name = dev.name();
-        let info = dev.info.as_ref();
-        let mut extras: Vec<String> = Vec::new();
-        if let Some(i) = info {
-            for v in i.all_volumes() {
-                for m in &v.mount_points {
-                    extras.push(m.trim_end_matches('\\').to_string());
-                }
-            }
-            for c in i.all_com_ports() {
-                extras.push(c.to_string());
-            }
+        if let Some(h) = p.device.as_ref().and_then(|d| d.hub.as_deref()) {
+            add_ports(f, snap, phys, opts, dn, depth + 1, ci, cid, ch.clone(), h);
         }
-        let mut health = Health::Ok;
-        if p.status.is_error() || info.is_some_and(|i| i.has_problem() && !i.is_disabled()) {
-            health = Health::Error;
-        } else if info.is_some_and(DevInfo::is_disabled) {
-            health = Health::Warning;
-        } else if crate::insights::speed_mismatch(p, dev).is_some() {
-            health = Health::Info;
+    }
+}
+
+/// Physical view: one row per socket; USB 3 hub halves merged.
+#[allow(clippy::too_many_arguments)]
+fn add_sockets(
+    f: &mut Flat,
+    snap: &Snapshot,
+    phys: &crate::physical::Physical,
+    opts: &FlattenOptions,
+    parent: usize,
+    depth: usize,
+    conns: &[crate::physical::Connector],
+) {
+    for con in conns {
+        let (ci, ch) = con.primary().clone();
+        let Some(p) = port(snap, ci, &ch) else {
+            continue;
+        };
+        let cid = ctrl_id(&snap.controllers[ci], ci);
+        let two_lanes = con.lanes.len() > 1;
+        let note = if con.attached.len() > 1 {
+            "USB 3 hub · both lanes".to_string()
+        } else if two_lanes
+            && con.attached.len() == 1
+            && !p.supports_usb300
+            && con.is_usb3()
+            && p.device
+                .as_ref()
+                .is_some_and(|d| d.max_capable_speed().is_super())
+        {
+            "on USB 2 lane".to_string()
+        } else if two_lanes && con.attached.is_empty() {
+            "USB 3 socket".to_string()
+        } else {
+            String::new()
+        };
+        let label = SocketLabel {
+            port_label: con.label(),
+            note,
+            max: con.max(),
+        };
+        let Some(dn) = port_node(
+            f,
+            snap,
+            phys,
+            opts,
+            parent,
+            depth,
+            ci,
+            &cid,
+            &ch,
+            p,
+            Some(label),
+        ) else {
+            continue;
+        };
+        if !con.children.is_empty() {
+            add_sockets(f, snap, phys, opts, dn, depth + 1, &con.children);
         }
-        let vidpid = dev.vid_pid().map(|(v, p)| format!("{v:04X}:{p:04X}")).unwrap_or_default();
-        let mut search = vec![name.clone(), port_label.clone(), pchain.clone(), vidpid.clone()];
-        if let Some(i) = info {
-            search.extend([
-                i.instance_id.clone(),
-                i.description.clone(),
-                i.friendly_name.clone(),
-                i.manufacturer.clone(),
-                i.service.clone(),
-                i.class.clone(),
-            ]);
-            for c in &i.children {
-                search.push(c.display_name().to_string());
-                search.push(c.instance_id.clone());
-            }
+    }
+}
+
+/// Adds the row for one port (or socket). Returns None when it is hidden.
+#[allow(clippy::too_many_arguments)]
+fn port_node(
+    f: &mut Flat,
+    snap: &Snapshot,
+    phys: &crate::physical::Physical,
+    opts: &FlattenOptions,
+    parent: usize,
+    depth: usize,
+    ci: usize,
+    cid: &str,
+    ch: &[usize],
+    p: &Port,
+    socket: Option<SocketLabel>,
+) -> Option<usize> {
+    let ch = ch.to_vec();
+    let pchain = port_chain(snap, ci, &ch);
+    let id = format!("{cid}/{pchain}");
+    let port_label = socket
+        .as_ref()
+        .map(|s| s.port_label.clone())
+        .unwrap_or_else(|| format!("Port {}", p.index));
+    let port_max = socket
+        .as_ref()
+        .map(|s| s.max)
+        .unwrap_or_else(|| p.max_speed());
+    let note = socket.as_ref().map(|s| s.note.clone()).unwrap_or_default();
+    let Some(dev) = &p.device else {
+        if !opts.show_empty_ports && !p.status.is_error() {
+            return None;
         }
-        for s in &dev.strings {
-            search.push(s.text.clone());
+        let health = if p.status.is_error() {
+            Health::Error
+        } else {
+            Health::Empty
+        };
+        let label = if p.status.is_error() {
+            p.status.label()
+        } else {
+            "Empty".into()
+        };
+        let mut tags: Vec<String> = Vec::new();
+        if !note.is_empty() {
+            tags.push(note.clone());
         }
-        if let Some((v, _)) = dev.vid_pid() {
-            if let Some(vn) = crate::usbids::db().vendor(v) {
-                search.push(vn.to_string());
-            }
+        if p.connector.as_ref().is_some_and(|c| c.type_c) {
+            tags.push("Type-C".into());
         }
-        search.extend(extras.iter().cloned());
-        let refs: Vec<&str> = search.iter().map(String::as_str).collect();
-        let kind = if dev.hub.is_some() || dev.is_hub { NodeKind::Hub } else { NodeKind::Device };
-        let detail = if extras.is_empty() { vidpid } else { extras.join(" ") };
-        let dn = push(
+        if p.connector.as_ref().is_some_and(|c| !c.user_connectable) {
+            tags.push("internal".into());
+        }
+        let detail = tags.join(" · ");
+        return Some(push(
             f,
             FlatNode {
                 id,
                 parent: Some(parent),
                 depth,
-                kind,
-                path: NodePath::Port(ci, ch.clone()),
-                label: name,
+                kind: NodeKind::EmptyPort,
+                path: NodePath::Port(ci, ch),
+                search_text: search_blob(&[&label, &port_label, &pchain]),
+                label,
                 detail,
                 port_label,
-                speed: dev.speed,
-                port_max_speed: p.max_speed(),
+                speed: Speed::Unknown,
+                port_max_speed: port_max,
                 health,
-                classes: dev.interface_classes(),
+                classes: vec![],
                 children: vec![],
-                search_text: search_blob(&refs),
             },
-        );
-        if let Some(h) = &dev.hub {
-            add_ports(f, snap, opts, dn, depth + 1, ci, cid, ch.clone(), h);
-        } else if opts.show_child_devices {
-            if let Some(i) = info {
-                add_children(f, dn, depth + 1, ci, &ch, vec![], i);
+        ));
+    };
+    let name = dev.name();
+    let info = dev.info.as_ref();
+    let mut extras: Vec<String> = Vec::new();
+    if let Some(i) = info {
+        for v in i.all_volumes() {
+            for m in &v.mount_points {
+                extras.push(m.trim_end_matches('\\').to_string());
             }
         }
+        for c in i.all_com_ports() {
+            extras.push(c.to_string());
+        }
     }
+    let mut health = Health::Ok;
+    if p.status.is_error() || info.is_some_and(|i| i.has_problem() && !i.is_disabled()) {
+        health = Health::Error;
+    } else if info.is_some_and(DevInfo::is_disabled) {
+        health = Health::Warning;
+    } else if crate::physical::explain_speed(snap, phys, ci, &ch).is_some() {
+        health = Health::Info;
+    }
+    let vidpid = dev
+        .vid_pid()
+        .map(|(v, p)| format!("{v:04X}:{p:04X}"))
+        .unwrap_or_default();
+    let mut search = vec![
+        name.clone(),
+        port_label.clone(),
+        pchain.clone(),
+        vidpid.clone(),
+    ];
+    if let Some(i) = info {
+        search.extend([
+            i.instance_id.clone(),
+            i.description.clone(),
+            i.friendly_name.clone(),
+            i.manufacturer.clone(),
+            i.service.clone(),
+            i.class.clone(),
+        ]);
+        for c in &i.children {
+            search.push(c.display_name().to_string());
+            search.push(c.instance_id.clone());
+        }
+    }
+    for s in &dev.strings {
+        search.push(s.text.clone());
+    }
+    if let Some((v, _)) = dev.vid_pid() {
+        if let Some(vn) = crate::usbids::db().vendor(v) {
+            search.push(vn.to_string());
+        }
+    }
+    search.extend(extras.iter().cloned());
+    let refs: Vec<&str> = search.iter().map(String::as_str).collect();
+    let kind = if dev.hub.is_some() || dev.is_hub {
+        NodeKind::Hub
+    } else {
+        NodeKind::Device
+    };
+    let mut detail = if extras.is_empty() {
+        vidpid
+    } else {
+        extras.join(" ")
+    };
+    if !note.is_empty() {
+        detail = if detail.is_empty() {
+            note
+        } else {
+            format!("{detail} · {note}")
+        };
+    }
+    let dn = push(
+        f,
+        FlatNode {
+            id,
+            parent: Some(parent),
+            depth,
+            kind,
+            path: NodePath::Port(ci, ch.clone()),
+            label: name,
+            detail,
+            port_label,
+            speed: dev.speed,
+            port_max_speed: port_max,
+            health,
+            classes: dev.interface_classes(),
+            children: vec![],
+            search_text: search_blob(&refs),
+        },
+    );
+    if dev.hub.is_none() && opts.show_child_devices {
+        if let Some(i) = info {
+            add_children(f, dn, depth + 1, ci, &ch, vec![], i);
+        }
+    }
+    Some(dn)
 }
 
-fn add_children(f: &mut Flat, parent: usize, depth: usize, ci: usize, port: &[usize], chain: Vec<usize>, info: &DevInfo) {
+fn add_children(
+    f: &mut Flat,
+    parent: usize,
+    depth: usize,
+    ci: usize,
+    port: &[usize],
+    chain: Vec<usize>,
+    info: &DevInfo,
+) {
     for (i, c) in info.children.iter().enumerate() {
         let mut ch = chain.clone();
         ch.push(i);
         let mut detail: Vec<String> = c
             .volumes
             .iter()
-            .flat_map(|v| v.mount_points.iter().map(|m| m.trim_end_matches('\\').to_string()))
+            .flat_map(|v| {
+                v.mount_points
+                    .iter()
+                    .map(|m| m.trim_end_matches('\\').to_string())
+            })
             .collect();
         if !c.com_port.is_empty() {
             detail.push(c.com_port.clone());
@@ -361,14 +532,27 @@ fn add_children(f: &mut Flat, parent: usize, depth: usize, ci: usize, port: &[us
                 kind: NodeKind::Child,
                 path: NodePath::Child(ci, port.to_vec(), ch.clone()),
                 label: c.display_name().to_string(),
-                detail: if detail.is_empty() { c.class.clone() } else { detail.join(" ") },
+                detail: if detail.is_empty() {
+                    c.class.clone()
+                } else {
+                    detail.join(" ")
+                },
                 port_label: String::new(),
                 speed: Speed::Unknown,
                 port_max_speed: Speed::Unknown,
-                health: if c.has_problem() { Health::Error } else { Health::Ok },
+                health: if c.has_problem() {
+                    Health::Error
+                } else {
+                    Health::Ok
+                },
                 classes: vec![],
                 children: vec![],
-                search_text: search_blob(&[c.display_name(), &c.instance_id, &c.class, &detail.join(" ")]),
+                search_text: search_blob(&[
+                    c.display_name(),
+                    &c.instance_id,
+                    &c.class,
+                    &detail.join(" "),
+                ]),
             },
         );
         add_children(f, n, depth + 1, ci, port, ch, c);
@@ -401,7 +585,14 @@ pub struct Change {
 }
 
 fn device_map(snap: &Snapshot) -> HashMap<String, (DeviceKey, String, u32)> {
-    let flat = flatten(snap, &FlattenOptions { show_empty_ports: false, show_child_devices: false });
+    let flat = flatten(
+        snap,
+        &FlattenOptions {
+            show_empty_ports: false,
+            show_child_devices: false,
+            physical: false,
+        },
+    );
     let mut m = HashMap::new();
     for n in &flat.nodes {
         if let NodePath::Port(ci, ch) = &n.path {
@@ -476,7 +667,14 @@ mod tests {
     #[test]
     fn flatten_demo_has_unique_ids_and_parents() {
         let s = demo::snapshot();
-        let f = flatten(&s, &FlattenOptions { show_empty_ports: true, show_child_devices: true });
+        let f = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: true,
+                physical: false,
+            },
+        );
         assert_eq!(f.by_id.len(), f.nodes.len(), "ids must be unique");
         for (i, n) in f.nodes.iter().enumerate() {
             if let Some(p) = n.parent {
@@ -491,21 +689,94 @@ mod tests {
     #[test]
     fn hiding_empty_ports_removes_them() {
         let s = demo::snapshot();
-        let with = flatten(&s, &FlattenOptions { show_empty_ports: true, show_child_devices: false });
-        let without = flatten(&s, &FlattenOptions { show_empty_ports: false, show_child_devices: false });
+        let with = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: false,
+                physical: false,
+            },
+        );
+        let without = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: false,
+                show_child_devices: false,
+                physical: false,
+            },
+        );
         assert!(with.nodes.len() > without.nodes.len());
-        assert!(without.nodes.iter().all(|n| n.kind != NodeKind::EmptyPort || n.health == Health::Error));
+        assert!(without
+            .nodes
+            .iter()
+            .all(|n| n.kind != NodeKind::EmptyPort || n.health == Health::Error));
     }
 
     #[test]
     fn port_lookup_follows_hubs() {
         let s = demo::snapshot();
-        let f = flatten(&s, &FlattenOptions { show_empty_ports: true, show_child_devices: false });
+        let f = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: false,
+                physical: false,
+            },
+        );
         for n in &f.nodes {
             if let NodePath::Port(ci, ch) = &n.path {
                 assert!(port(&s, *ci, ch).is_some(), "{}", n.id);
             }
         }
+    }
+
+    #[test]
+    fn physical_tree_merges_sockets_and_hub_halves() {
+        let s = demo::snapshot();
+        let logical = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: false,
+                physical: false,
+            },
+        );
+        let physical = flatten(
+            &s,
+            &FlattenOptions {
+                show_empty_ports: true,
+                show_child_devices: false,
+                physical: true,
+            },
+        );
+        assert!(physical.nodes.len() < logical.nodes.len());
+        assert_eq!(physical.by_id.len(), physical.nodes.len());
+        // Every device is still reachable, and the USB 3 hub shows once.
+        let devs = |f: &Flat| {
+            f.nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Device)
+                .count()
+        };
+        assert_eq!(devs(&physical), devs(&logical));
+        let hubs = physical
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Hub)
+            .count();
+        assert_eq!(
+            hubs,
+            logical
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Hub)
+                .count()
+                - 1
+        );
+        assert!(physical
+            .nodes
+            .iter()
+            .any(|n| n.port_label == "Port 3 · 9" && n.detail.contains("USB 2 lane")));
     }
 
     #[test]

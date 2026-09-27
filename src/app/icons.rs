@@ -29,7 +29,11 @@ fn for_child_label(label: &str, class: &str) -> &'static str {
         ph::GAME_CONTROLLER
     } else if s.contains("camera") || s.contains("image") {
         ph::WEBCAM
-    } else if s.contains("audio") || s.contains("media") || s.contains("microphone") || s.contains("speaker") {
+    } else if s.contains("audio")
+        || s.contains("media")
+        || s.contains("microphone")
+        || s.contains("speaker")
+    {
         ph::SPEAKER_HIGH
     } else if s.contains("port") || s.contains("com") || s.contains("serial") {
         ph::TERMINAL_WINDOW
@@ -37,7 +41,11 @@ fn for_child_label(label: &str, class: &str) -> &'static str {
         ph::NETWORK
     } else if s.contains("bluetooth") {
         ph::BLUETOOTH
-    } else if s.contains("wpd") || s.contains("phone") || s.contains("android") || s.contains("iphone") {
+    } else if s.contains("wpd")
+        || s.contains("phone")
+        || s.contains("android")
+        || s.contains("iphone")
+    {
         ph::DEVICE_MOBILE
     } else {
         ph::CUBE
@@ -46,8 +54,16 @@ fn for_child_label(label: &str, class: &str) -> &'static str {
 
 fn for_device(n: &FlatNode, dev: Option<&Device>) -> &'static str {
     let name = n.label.to_lowercase();
-    let svc = dev.and_then(|d| d.info.as_ref()).map(|i| format!("{} {}", i.service, i.class).to_lowercase()).unwrap_or_default();
-    if name.contains("android") || name.contains("iphone") || name.contains("phone") || svc.contains("wpd") || svc.contains("wudf") && name.contains("mtp") {
+    let svc = dev
+        .and_then(|d| d.info.as_ref())
+        .map(|i| format!("{} {}", i.service, i.class).to_lowercase())
+        .unwrap_or_default();
+    if name.contains("android")
+        || name.contains("iphone")
+        || name.contains("phone")
+        || svc.contains("wpd")
+        || svc.contains("wudf") && name.contains("mtp")
+    {
         return ph::DEVICE_MOBILE;
     }
     if name.contains("keyboard") || name.contains("keychron") {
@@ -59,7 +75,11 @@ fn for_device(n: &FlatNode, dev: Option<&Device>) -> &'static str {
     if name.contains("launchkey") || name.contains("midi") || name.contains("piano") {
         return ph::PIANO_KEYS;
     }
-    if name.contains("goxlr") || name.contains("headset") || name.contains("headphone") || name.contains("dac") {
+    if name.contains("goxlr")
+        || name.contains("headset")
+        || name.contains("headphone")
+        || name.contains("dac")
+    {
         return ph::HEADPHONES;
     }
     if name.contains("led") || name.contains("aura") || name.contains("rgb") {
@@ -74,7 +94,11 @@ fn for_device(n: &FlatNode, dev: Option<&Device>) -> &'static str {
     } else if has(0x08) {
         ph::HARD_DRIVES
     } else if has(0x01) {
-        if name.contains("mic") { ph::MICROPHONE } else { ph::SPEAKER_HIGH }
+        if name.contains("mic") {
+            ph::MICROPHONE
+        } else {
+            ph::SPEAKER_HIGH
+        }
     } else if has(0x07) {
         ph::PRINTER
     } else if has(0x06) {
@@ -82,7 +106,11 @@ fn for_device(n: &FlatNode, dev: Option<&Device>) -> &'static str {
     } else if has(0x0B) {
         ph::IDENTIFICATION_CARD
     } else if has(0x02) || has(0x0A) {
-        if svc.contains("usbser") || svc.contains("ports") { ph::TERMINAL_WINDOW } else { ph::NETWORK }
+        if svc.contains("usbser") || svc.contains("ports") {
+            ph::TERMINAL_WINDOW
+        } else {
+            ph::NETWORK
+        }
     } else if has(0x03) {
         ph::GAME_CONTROLLER
     } else if has(0xFE) {

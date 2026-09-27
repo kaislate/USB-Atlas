@@ -2,7 +2,9 @@
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_WRITE, HANDLE};
-use windows::Win32::Storage::FileSystem::{CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_WRITE, OPEN_EXISTING};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
 use windows::Win32::System::IO::DeviceIoControl;
 
 /// RAII wrapper that closes a handle on drop.
@@ -30,7 +32,10 @@ pub fn wide_at(buf: &[u8], offset: usize) -> String {
     if offset >= buf.len() {
         return String::new();
     }
-    let units: Vec<u16> = buf[offset..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = buf[offset..]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     from_wide(&units)
 }
 
@@ -44,11 +49,15 @@ pub fn multi_sz(units: &[u16]) -> Vec<String> {
 }
 
 pub fn u16_at(b: &[u8], o: usize) -> u16 {
-    b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]])).unwrap_or(0)
+    b.get(o..o + 2)
+        .map(|s| u16::from_le_bytes([s[0], s[1]]))
+        .unwrap_or(0)
 }
 
 pub fn u32_at(b: &[u8], o: usize) -> u32 {
-    b.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])).unwrap_or(0)
+    b.get(o..o + 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .unwrap_or(0)
 }
 
 pub fn open_device(path: &str) -> windows::core::Result<Handle> {
@@ -91,7 +100,13 @@ pub fn ioctl(h: &Handle, code: u32, input: &[u8], size: usize) -> windows::core:
 
 /// Two-pass query for the variable-length USB name structures. `name_offset`
 /// is where the UTF-16 name starts, `len_offset` where `ActualLength` is.
-pub fn ioctl_name(h: &Handle, code: u32, input: &[u8], len_offset: usize, name_offset: usize) -> Option<String> {
+pub fn ioctl_name(
+    h: &Handle,
+    code: u32,
+    input: &[u8],
+    len_offset: usize,
+    name_offset: usize,
+) -> Option<String> {
     let first = ioctl(h, code, input, name_offset + 2).ok()?;
     let actual = u32_at(&first, len_offset) as usize;
     if actual <= name_offset {
@@ -99,13 +114,17 @@ pub fn ioctl_name(h: &Handle, code: u32, input: &[u8], len_offset: usize, name_o
     }
     let full = ioctl(h, code, input, actual).ok()?;
     let s = wide_at(&full, name_offset);
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Converts a FILETIME (100 ns ticks since 1601) to `YYYY-MM-DD`.
 pub fn filetime_to_date(ft: u64) -> String {
     let days = (ft / 10_000_000 / 86_400) as i64 - 134_774; // days since 1970-01-01
-    // Civil-from-days (Howard Hinnant).
+                                                            // Civil-from-days (Howard Hinnant).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;

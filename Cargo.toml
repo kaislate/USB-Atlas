@@ -1,8 +1,12 @@
 [package]
-name = "usbtree"
+name = "usb-atlas"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
+
+[[bin]]
+name = "USB_Atlas"
+path = "src/main.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -26,3 +30,6 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.35.0", features = ["wgpu", "eframe", "snapshot"] }

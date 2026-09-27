@@ -7,6 +7,7 @@ mod details;
 mod export;
 mod insights;
 mod model;
+mod physical;
 mod platform;
 mod tree;
 mod usbids;
@@ -14,11 +15,14 @@ mod usbids;
 use std::path::PathBuf;
 
 const HELP: &str = "\
-Usage: usbtree [options] [snapshot.json]
+Usage: USB_Atlas [options] [snapshot.json]
 
   (no options)          Start the GUI with the live USB topology
   snapshot.json         Start the GUI showing a saved snapshot
   --demo                Start the GUI with built-in demo data
+  --view <tree|map|learn>   Start in a specific view
+  --lesson <name>       Open a guide chapter (e.g. names, speeds, companion)
+  --select <name>       Select the first device whose name contains <name>
   --report [file]       Write a text report (stdout if no file)
   --html <file>         Write an HTML report
   --json [file]         Write a JSON snapshot (stdout if no file)
@@ -62,7 +66,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             print!("{HELP}");
             return Ok(());
         }
-        let snap = if args.iter().any(|a| a == "--demo") { demo::snapshot() } else { platform::scan() };
+        let snap = if args.iter().any(|a| a == "--demo") {
+            demo::snapshot()
+        } else {
+            platform::scan()
+        };
         if let Some(out) = arg_value(&args, "--report") {
             write_out(out.as_ref(), &details::full_report(&snap, hex))?;
         }
@@ -79,8 +87,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let open: Option<PathBuf> = args.iter().find(|a| !a.starts_with("--")).map(PathBuf::from);
+    // First positional argument that isn't the value of a flag.
+    let open: Option<PathBuf> = args
+        .iter()
+        .enumerate()
+        .find(|(i, a)| {
+            !a.starts_with("--")
+                && (*i == 0 || !matches!(args[i - 1].as_str(), "--view" | "--lesson" | "--select"))
+        })
+        .map(|(_, a)| PathBuf::from(a));
     let demo = args.iter().any(|a| a == "--demo");
+    let view = arg_value(&args, "--view").flatten();
+    let lesson = arg_value(&args, "--lesson").flatten();
+    let select = arg_value(&args, "--select").flatten();
 
     let icon = Some(app::icon::app_icon());
     let mut viewport = egui::ViewportBuilder::default()
@@ -88,11 +107,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size([1360.0, 860.0])
         .with_min_inner_size([760.0, 480.0])
         .with_drag_and_drop(true)
-        .with_app_id("usbtree");
+        .with_app_id("usb-atlas");
     if let Some(i) = icon {
         viewport = viewport.with_icon(std::sync::Arc::new(i));
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
     eframe::run_native(
         app::APP_NAME,
         options,
@@ -100,6 +122,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut a = app::App::new(cc, open);
             if demo {
                 a.load_demo();
+            }
+            a.apply_launch_view(view.as_deref(), lesson.as_deref());
+            if let Some(s) = &select {
+                a.select_by_name(s);
             }
             Ok(Box::new(a))
         }),

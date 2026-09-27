@@ -44,7 +44,11 @@ fn decode_hid(d: &[u8], base: usize) -> DescNode {
             15 => "Japanese",
             _ => "",
         };
-        if c.is_empty() { format!("0x{v:02X}") } else { format!("0x{v:02X} ({c})") }
+        if c.is_empty() {
+            format!("0x{v:02X}")
+        } else {
+            format!("0x{v:02X} ({c})")
+        }
     });
     let n = r.dec("bNumDescriptors", 1).unwrap_or(0);
     for i in 0..n {
@@ -53,7 +57,9 @@ fn decode_hid(d: &[u8], base: usize) -> DescNode {
             0x23 => "Physical".into(),
             _ => String::new(),
         });
-        r.num(&format!("wDescriptorLength[{i}]"), 2, |v| format!("{v} bytes"));
+        r.num(&format!("wDescriptorLength[{i}]"), 2, |v| {
+            format!("{v} bytes")
+        });
     }
     r.rest("extra");
     r.finish()
@@ -64,9 +70,15 @@ fn decode_otg(d: &[u8], base: usize) -> DescNode {
     header(&mut r, 0x09);
     r.num("bmAttributes", 1, |v| {
         let mut p = Vec::new();
-        if v & 1 != 0 { p.push("SRP") }
-        if v & 2 != 0 { p.push("HNP") }
-        if v & 4 != 0 { p.push("ADP") }
+        if v & 1 != 0 {
+            p.push("SRP")
+        }
+        if v & 2 != 0 {
+            p.push("HNP")
+        }
+        if v & 4 != 0 {
+            p.push("ADP")
+        }
         format!("0x{v:02X} ({})", p.join(", "))
     });
     if r.remaining() >= 2 {
@@ -76,14 +88,27 @@ fn decode_otg(d: &[u8], base: usize) -> DescNode {
 }
 
 fn decode_dfu(d: &[u8], base: usize) -> DescNode {
-    let mut r = Reader::new(d, base, "DFU Functional Descriptor", DescKind::ClassSpecific);
+    let mut r = Reader::new(
+        d,
+        base,
+        "DFU Functional Descriptor",
+        DescKind::ClassSpecific,
+    );
     header(&mut r, 0x21);
     r.num("bmAttributes", 1, |v| {
         let mut p = Vec::new();
-        if v & 1 != 0 { p.push("download") }
-        if v & 2 != 0 { p.push("upload") }
-        if v & 4 != 0 { p.push("manifestation tolerant") }
-        if v & 8 != 0 { p.push("will detach") }
+        if v & 1 != 0 {
+            p.push("download")
+        }
+        if v & 2 != 0 {
+            p.push("upload")
+        }
+        if v & 4 != 0 {
+            p.push("manifestation tolerant")
+        }
+        if v & 8 != 0 {
+            p.push("will detach")
+        }
         format!("0x{v:02X} ({})", p.join(", "))
     });
     r.num("wDetachTimeOut", 2, |v| format!("{v} ms"));
@@ -95,7 +120,8 @@ fn decode_dfu(d: &[u8], base: usize) -> DescNode {
 }
 
 fn subtype(r: &mut Reader, names: &dyn Fn(u8) -> &'static str) -> u8 {
-    r.hex_note("bDescriptorSubtype", 1, |v| names(v as u8).to_string()).unwrap_or(0) as u8
+    r.hex_note("bDescriptorSubtype", 1, |v| names(v as u8).to_string())
+        .unwrap_or(0) as u8
 }
 
 fn decode_audio(d: &[u8], base: usize, sub: u8) -> DescNode {
@@ -219,7 +245,10 @@ fn decode_video(d: &[u8], base: usize, sub: u8) -> DescNode {
             if st != 0x06 {
                 r.bytes("guidFormat", 16, |g| {
                     let s = super::uuid(g);
-                    let fourcc: String = g[..4].iter().map(|&c| if c.is_ascii_graphic() { c as char } else { '.' }).collect();
+                    let fourcc: String = g[..4]
+                        .iter()
+                        .map(|&c| if c.is_ascii_graphic() { c as char } else { '.' })
+                        .collect();
                     format!("{s} ({fourcc})")
                 });
             }

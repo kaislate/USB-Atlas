@@ -18,11 +18,17 @@ struct Sink {
 
 /// Device-instance events arrive for every device in the system; only USB
 /// related instances (`USB\...`, `USBSTOR\...`) should trigger a rescan.
-unsafe fn is_relevant(action: CM_NOTIFY_ACTION, data: *const CM_NOTIFY_EVENT_DATA, size: u32) -> bool {
+unsafe fn is_relevant(
+    action: CM_NOTIFY_ACTION,
+    data: *const CM_NOTIFY_EVENT_DATA,
+    size: u32,
+) -> bool {
     if data.is_null() || (*data).FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEINSTANCE {
         return true;
     }
-    if action != CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED && action != CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED {
+    if action != CM_NOTIFY_ACTION_DEVICEINSTANCESTARTED
+        && action != CM_NOTIFY_ACTION_DEVICEINSTANCEREMOVED
+    {
         return false;
     }
     // InstanceId (NUL-terminated UTF-16) starts at offset 8.
@@ -51,7 +57,10 @@ unsafe extern "system" fn callback(
 impl Watcher {
     /// Every USB device / hub arrival or removal sends `()` on `tx` and calls `wake`.
     pub fn start(tx: Sender<()>, wake: impl Fn() + Send + Sync + 'static) -> Option<Self> {
-        let ctx = Box::new(Sink { tx, wake: Box::new(wake) });
+        let ctx = Box::new(Sink {
+            tx,
+            wake: Box::new(wake),
+        });
         let mut handles = Vec::new();
         for guid in [GUID_DEVINTERFACE_USB_DEVICE, GUID_DEVINTERFACE_USB_HUB] {
             let mut filter = CM_NOTIFY_FILTER {
@@ -62,7 +71,12 @@ impl Watcher {
             filter.u.DeviceInterface.ClassGuid = guid;
             let mut h = HCMNOTIFICATION::default();
             let cr = unsafe {
-                CM_Register_Notification(&filter, Some(&*ctx as *const Sink as *const c_void), Some(callback), &mut h)
+                CM_Register_Notification(
+                    &filter,
+                    Some(&*ctx as *const Sink as *const c_void),
+                    Some(callback),
+                    &mut h,
+                )
             };
             if cr == CR_SUCCESS {
                 handles.push(h);
@@ -77,8 +91,14 @@ impl Watcher {
         };
         filter.Reserved = 0;
         let mut h = HCMNOTIFICATION::default();
-        if unsafe { CM_Register_Notification(&filter, Some(&*ctx as *const Sink as *const c_void), Some(callback), &mut h) }
-            == CR_SUCCESS
+        if unsafe {
+            CM_Register_Notification(
+                &filter,
+                Some(&*ctx as *const Sink as *const c_void),
+                Some(callback),
+                &mut h,
+            )
+        } == CR_SUCCESS
         {
             handles.push(h);
         }
@@ -105,6 +125,9 @@ mod tests {
     fn registers_notifications() {
         let (tx, _rx) = std::sync::mpsc::channel();
         let w = super::Watcher::start(tx, || {});
-        assert!(w.is_some_and(|w| w.handles.len() == 3), "all three CM notification filters should register");
+        assert!(
+            w.is_some_and(|w| w.handles.len() == 3),
+            "all three CM notification filters should register"
+        );
     }
 }

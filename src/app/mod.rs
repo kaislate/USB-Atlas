@@ -5,7 +5,11 @@ mod detail_view;
 mod hex;
 pub mod icon;
 mod icons;
+pub(crate) mod learn;
+pub(crate) mod map;
 mod palette;
+#[cfg(test)]
+mod screenshots;
 mod settings;
 mod theme;
 mod toasts;
@@ -36,6 +40,13 @@ pub enum DetailTab {
     Overview,
     Descriptors,
     Report,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ViewMode {
+    Tree,
+    Map,
+    Learn,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,10 +83,24 @@ pub struct Ghost {
 #[derive(Clone, Debug)]
 pub enum Action {
     Refresh,
-    SafelyRemove { id: String, name: String },
-    Restart { id: String, name: String },
-    SetEnabled { id: String, name: String, enable: bool },
-    CyclePort { hub: String, port: u32, name: String },
+    SafelyRemove {
+        id: String,
+        name: String,
+    },
+    Restart {
+        id: String,
+        name: String,
+    },
+    SetEnabled {
+        id: String,
+        name: String,
+        enable: bool,
+    },
+    CyclePort {
+        hub: String,
+        port: u32,
+        name: String,
+    },
     Properties(String),
     OpenPath(String),
     CopyText(String),
@@ -93,6 +118,7 @@ pub enum Action {
     ToggleTheme,
     ToggleEmptyPorts,
     ToggleChildDevices,
+    TogglePhysical,
     ToggleLive,
     ExpandAll,
     CollapseAll,
@@ -102,6 +128,9 @@ pub enum Action {
     OpenPalette,
     OpenSettings,
     About,
+    SetView(ViewMode),
+    OpenLesson(learn::Chapter),
+    ToggleMapLegend,
 }
 
 pub enum Source {
@@ -173,6 +202,9 @@ pub struct App {
     pub settings_open: bool,
     pub about_open: bool,
     pub report_cache: Option<(String, String)>,
+    pub view: ViewMode,
+    pub map: map::MapState,
+    pub learn: learn::LearnState,
     pending: Vec<Action>,
 }
 
@@ -180,13 +212,17 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
-        let system_dark = cc.egui_ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(true);
+        let system_dark = cc
+            .egui_ctx
+            .system_theme()
+            .map(|t| t == egui::Theme::Dark)
+            .unwrap_or(true);
         let dark = match settings.theme {
             ThemeMode::System => system_dark,
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
         };
-        let p = Palette::new(dark, settings.accent);
+        let p = Palette::new(dark, settings.accent).with_links(&settings.link_colors);
         theme::apply(&cc.egui_ctx, &p);
 
         // Scanner thread: every request produces a fresh snapshot.
@@ -257,10 +293,19 @@ impl App {
             settings_open: false,
             about_open: false,
             report_cache: None,
+            view: ViewMode::Tree,
+            map: map::MapState::default(),
+            learn: learn::LearnState::default(),
             pending: Vec::new(),
         };
+        if app.settings.map_view {
+            app.view = ViewMode::Map;
+        }
         if app.settings.always_on_top {
-            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::AlwaysOnTop));
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                    egui::WindowLevel::AlwaysOnTop,
+                ));
         }
         match open {
             Some(path) => app.load_snapshot_file(path),
@@ -287,11 +332,16 @@ impl App {
     }
 
     pub fn toast(&mut self, kind: ToastKind, title: impl Into<String>, body: impl Into<String>) {
-        self.toasts.push(Toast::new(kind, title.into(), body.into()));
+        self.toasts
+            .push(Toast::new(kind, title.into(), body.into()));
     }
 
     pub fn flatten_opts(&self) -> FlattenOptions {
-        FlattenOptions { show_empty_ports: self.settings.show_empty_ports, show_child_devices: self.settings.show_child_devices }
+        FlattenOptions {
+            show_empty_ports: self.settings.show_empty_ports,
+            show_child_devices: self.settings.show_child_devices,
+            physical: self.settings.physical_tree,
+        }
     }
 
     /// Rebuilds the flat tree (and ghosts) from the current snapshot.
@@ -309,7 +359,8 @@ impl App {
             }
         }
         // Keep recently removed devices visible as fading ghosts.
-        self.ghosts.retain(|g| g.at.elapsed() < Duration::from_secs(8));
+        self.ghosts
+            .retain(|g| g.at.elapsed() < Duration::from_secs(8));
         for g in &self.ghosts {
             if flat.by_id.contains_key(&g.node.id) {
                 continue;
@@ -323,9 +374,17 @@ impl App {
                 flat.by_id.insert(n.id.clone(), idx);
                 flat.nodes.push(n);
                 // Insert in port order among siblings.
-                let port_no = |n: &FlatNode| n.port_label.trim_start_matches("Port ").parse::<u32>().unwrap_or(u32::MAX);
+                let port_no = |n: &FlatNode| {
+                    n.port_label
+                        .trim_start_matches("Port ")
+                        .parse::<u32>()
+                        .unwrap_or(u32::MAX)
+                };
                 let my = port_no(&flat.nodes[idx]);
-                let pos = flat.nodes[pi].children.iter().position(|&c| port_no(&flat.nodes[c]) > my);
+                let pos = flat.nodes[pi]
+                    .children
+                    .iter()
+                    .position(|&c| port_no(&flat.nodes[c]) > my);
                 match pos {
                     Some(p) => flat.nodes[pi].children.insert(p, idx),
                     None => flat.nodes[pi].children.push(idx),
@@ -336,7 +395,10 @@ impl App {
         for n in &flat.nodes {
             if let NodePath::Port(ci, ch) = &n.path {
                 let hub_sym = if ch.len() == 1 {
-                    snap.controllers[*ci].root_hub.as_ref().map(|h| h.symbolic_name.clone())
+                    snap.controllers[*ci]
+                        .root_hub
+                        .as_ref()
+                        .map(|h| h.symbolic_name.clone())
                 } else {
                     tree::port(snap, *ci, &ch[..ch.len() - 1])
                         .and_then(|p| p.device.as_ref())
@@ -349,15 +411,29 @@ impl App {
             }
         }
         self.insights = insights::analyze(snap, &flat);
+        self.map.layout = map::build_layout(snap, self.settings.map_show_empty);
         self.flat = flat;
         self.report_cache = None;
-        if self.selected.as_ref().is_none_or(|s| !self.flat.by_id.contains_key(s)) {
+        if self
+            .selected
+            .as_ref()
+            .is_none_or(|s| !self.flat.by_id.contains_key(s))
+        {
             self.selected = self.flat.nodes.first().map(|n| n.id.clone());
         }
     }
 
+    pub fn rebuild_map(&mut self) {
+        if let Some(s) = &self.snapshot {
+            self.map.layout = map::build_layout(s, self.settings.map_show_empty);
+        }
+    }
+
     pub fn is_ghost(&self, id: &str) -> Option<f32> {
-        self.ghosts.iter().find(|g| g.node.id == id).map(|g| g.at.elapsed().as_secs_f32())
+        self.ghosts
+            .iter()
+            .find(|g| g.node.id == id)
+            .map(|g| g.at.elapsed().as_secs_f32())
     }
 
     fn on_new_snapshot(&mut self, snap: Snapshot) {
@@ -375,7 +451,14 @@ impl App {
                     self.arrivals.insert(c.node_id.clone(), Instant::now());
                     self.ghosts.retain(|g| g.node.id != c.node_id);
                     if self.settings.notify_arrivals {
-                        self.toasts.push(Toast::new(ToastKind::Arrived, "Device connected".into(), c.name.clone()).with_target(c.node_id.clone()));
+                        self.toasts.push(
+                            Toast::new(
+                                ToastKind::Arrived,
+                                "Device connected".into(),
+                                c.name.clone(),
+                            )
+                            .with_target(c.node_id.clone()),
+                        );
                     }
                     if self.settings.jump_to_new {
                         jump = Some(c.node_id.clone());
@@ -383,32 +466,64 @@ impl App {
                 }
                 ChangeKind::Removed => {
                     if let Some(n) = old_flat.get(&c.node_id) {
-                        let parent_id = n.parent.map(|p| old_flat.nodes[p].id.clone()).unwrap_or_default();
-                        self.ghosts.push(Ghost { node: n.clone(), parent_id, at: Instant::now() });
+                        let parent_id = n
+                            .parent
+                            .map(|p| old_flat.nodes[p].id.clone())
+                            .unwrap_or_default();
+                        self.ghosts.push(Ghost {
+                            node: n.clone(),
+                            parent_id,
+                            at: Instant::now(),
+                        });
                     }
                     if self.settings.notify_arrivals {
-                        self.toasts.push(Toast::new(ToastKind::Removed, "Device disconnected".into(), c.name.clone()));
+                        self.toasts.push(Toast::new(
+                            ToastKind::Removed,
+                            "Device disconnected".into(),
+                            c.name.clone(),
+                        ));
                     }
                 }
                 ChangeKind::ProblemAppeared(code) => {
                     self.toasts.push(
-                        Toast::new(ToastKind::Error, format!("Problem code {code}"), format!("{} – {}", c.name, insights::problem_text(code)))
-                            .with_target(c.node_id.clone()),
+                        Toast::new(
+                            ToastKind::Error,
+                            format!("Problem code {code}"),
+                            format!("{} – {}", c.name, insights::problem_text(code)),
+                        )
+                        .with_target(c.node_id.clone()),
                     );
                 }
                 ChangeKind::ProblemCleared => {}
             }
-            self.events.push(Event { time: now.clone(), kind: c.kind.clone(), node_id: c.node_id.clone(), name: c.name.clone(), vid_pid: c.vid_pid });
+            self.events.push(Event {
+                time: now.clone(),
+                kind: c.kind.clone(),
+                node_id: c.node_id.clone(),
+                name: c.name.clone(),
+                vid_pid: c.vid_pid,
+            });
         }
         if self.events.len() > 1000 {
             let n = self.events.len() - 1000;
             self.events.drain(..n);
         }
+        if !changes.is_empty() || first {
+            self.map.selected = None;
+        }
+        if first {
+            self.map.needs_fit = true;
+        }
         self.snapshot = Some(snap);
         self.rebuild();
         if first {
             // Start with the first device-bearing controller selected.
-            if let Some(n) = self.flat.nodes.iter().find(|n| n.kind == tree::NodeKind::Device) {
+            if let Some(n) = self
+                .flat
+                .nodes
+                .iter()
+                .find(|n| n.kind == tree::NodeKind::Device)
+            {
                 self.selected = Some(n.id.clone());
             }
         }
@@ -435,7 +550,9 @@ impl App {
 
     pub fn device_at(&self, path: &NodePath) -> Option<&Device> {
         match path {
-            NodePath::Port(ci, ch) => tree::port(self.snapshot.as_ref()?, *ci, ch)?.device.as_ref(),
+            NodePath::Port(ci, ch) => tree::port(self.snapshot.as_ref()?, *ci, ch)?
+                .device
+                .as_ref(),
             _ => None,
         }
     }
@@ -468,8 +585,12 @@ impl App {
 
     /// Node id of the companion port of `id` (USB2 <-> USB3 halves).
     pub fn companions_of(&self, id: &str) -> Vec<String> {
-        let Some(port) = self.flat.get(id).and_then(|n| self.port_at(&n.path)) else { return vec![] };
-        let Some((my_hub, my_port)) = self.port_map.get(id) else { return vec![] };
+        let Some(port) = self.flat.get(id).and_then(|n| self.port_at(&n.path)) else {
+            return vec![];
+        };
+        let Some((my_hub, my_port)) = self.port_map.get(id) else {
+            return vec![];
+        };
         let mut out = Vec::new();
         if let Some(c) = &port.connector {
             if c.companion_port != 0 && !c.companion_hub.is_empty() {
@@ -487,7 +608,9 @@ impl App {
             }
             if let Some(pp) = self.flat.get(nid).and_then(|n| self.port_at(&n.path)) {
                 if let Some(c) = &pp.connector {
-                    if c.companion_port as u32 == *my_port && c.companion_hub.eq_ignore_ascii_case(my_hub) {
+                    if c.companion_port as u32 == *my_port
+                        && c.companion_hub.eq_ignore_ascii_case(my_hub)
+                    {
                         out.push(nid.clone());
                     }
                 }
@@ -502,8 +625,42 @@ impl App {
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
         };
-        self.p = Palette::new(dark, self.settings.accent);
+        self.p = Palette::new(dark, self.settings.accent).with_links(&self.settings.link_colors);
         theme::apply(ctx, &self.p);
+    }
+
+    /// Applies `--view` / `--lesson` from the command line.
+    pub fn apply_launch_view(&mut self, view: Option<&str>, lesson: Option<&str>) {
+        match view {
+            Some("map") => self.view = ViewMode::Map,
+            Some("learn") => self.view = ViewMode::Learn,
+            Some("tree") => self.view = ViewMode::Tree,
+            _ => {}
+        }
+        if let Some(l) = lesson {
+            let l = l.to_lowercase();
+            if let Some(c) = learn::Chapter::all()
+                .into_iter()
+                .find(|c| c.title().to_lowercase().contains(&l))
+            {
+                self.learn.open(c);
+                self.view = ViewMode::Learn;
+            }
+        }
+    }
+
+    /// Selects the first node whose label contains `text` (case-insensitive).
+    pub fn select_by_name(&mut self, text: &str) {
+        let t = text.to_lowercase();
+        if let Some(id) = self
+            .flat
+            .nodes
+            .iter()
+            .find(|n| n.label.to_lowercase().contains(&t))
+            .map(|n| n.id.clone())
+        {
+            self.select(id);
+        }
     }
 
     pub fn load_demo(&mut self) {
@@ -513,20 +670,33 @@ impl App {
     }
 
     fn load_snapshot_file(&mut self, path: PathBuf) {
-        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Snapshot>(&s).map_err(|e| e.to_string())) {
+        match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| serde_json::from_str::<Snapshot>(&s).map_err(|e| e.to_string()))
+        {
             Ok(snap) => {
                 self.source = Source::File(path.clone());
                 self.snapshot = None;
                 self.ghosts.clear();
                 self.arrivals.clear();
                 self.on_new_snapshot(snap);
-                self.toast(ToastKind::Info, "Snapshot opened", path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
+                self.toast(
+                    ToastKind::Info,
+                    "Snapshot opened",
+                    path.file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                );
             }
             Err(e) => self.toast(ToastKind::Error, "Could not open snapshot", e),
         }
     }
 
-    fn run_device_action(&mut self, title: &str, f: impl FnOnce() -> Result<String, String> + Send + 'static) {
+    fn run_device_action(
+        &mut self,
+        title: &str,
+        f: impl FnOnce() -> Result<String, String> + Send + 'static,
+    ) {
         let tx = self.action_tx.clone();
         let title = title.to_string();
         self.toast(ToastKind::Info, format!("{title}…"), "Working");
@@ -551,7 +721,11 @@ impl App {
     fn handle(&mut self, a: Action, ctx: &egui::Context, confirmed: bool) {
         if !confirmed {
             if let Some((title, body)) = self.needs_confirm(&a) {
-                self.confirm = Some(Confirm { title, body, action: a });
+                self.confirm = Some(Confirm {
+                    title,
+                    body,
+                    action: a,
+                });
                 return;
             }
         }
@@ -560,16 +734,32 @@ impl App {
                 if self.is_live() {
                     self.request_scan();
                 } else {
-                    self.toast(ToastKind::Info, "Viewing a snapshot", "Switch back to live view to refresh.");
+                    self.toast(
+                        ToastKind::Info,
+                        "Viewing a snapshot",
+                        "Switch back to live view to refresh.",
+                    );
                 }
             }
-            Action::SafelyRemove { id, name } => self.run_device_action(&format!("Eject {name}"), move || platform::safely_remove(&id)),
-            Action::Restart { id, name } => self.run_device_action(&format!("Restart {name}"), move || platform::restart(&id)),
+            Action::SafelyRemove { id, name } => self
+                .run_device_action(&format!("Eject {name}"), move || {
+                    platform::safely_remove(&id)
+                }),
+            Action::Restart { id, name } => {
+                self.run_device_action(&format!("Restart {name}"), move || platform::restart(&id))
+            }
             Action::SetEnabled { id, name, enable } => {
-                let t = if enable { format!("Enable {name}") } else { format!("Disable {name}") };
+                let t = if enable {
+                    format!("Enable {name}")
+                } else {
+                    format!("Disable {name}")
+                };
                 self.run_device_action(&t, move || platform::set_enabled(&id, enable))
             }
-            Action::CyclePort { hub, port, name } => self.run_device_action(&format!("Cycle port ({name})"), move || platform::cycle_port(&hub, port)),
+            Action::CyclePort { hub, port, name } => self
+                .run_device_action(&format!("Cycle port ({name})"), move || {
+                    platform::cycle_port(&hub, port)
+                }),
             Action::Properties(id) => {
                 if let Err(e) = platform::open_device_properties(&id) {
                     self.toast(ToastKind::Error, "Could not open properties", e);
@@ -586,30 +776,54 @@ impl App {
             }
             Action::CopyNodeReport(id) => {
                 if let (Some(n), Some(s)) = (self.flat.get(&id), &self.snapshot) {
-                    let t = crate::details::to_text(&self.display_label(n), &crate::details::sections(s, &n.path), self.settings.hexdumps_in_reports);
+                    let t = crate::details::to_text(
+                        &self.display_label(n),
+                        &crate::details::sections(s, &n.path),
+                        self.settings.hexdumps_in_reports,
+                    );
                     ctx.copy_text(t);
                     self.toast(ToastKind::Success, "Report copied", n.label.clone());
                 }
             }
             Action::CopyFullReport => {
                 if let Some(s) = &self.snapshot {
-                    ctx.copy_text(crate::details::full_report(s, self.settings.hexdumps_in_reports));
+                    ctx.copy_text(crate::details::full_report(
+                        s,
+                        self.settings.hexdumps_in_reports,
+                    ));
                     self.toast(ToastKind::Success, "Full report copied", "");
                 }
             }
             Action::SaveSnapshot => {
                 if let Some(s) = &self.snapshot {
-                    let name = format!("usb-snapshot-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-                    if let Some(path) = rfd::FileDialog::new().add_filter("Snapshot", &["json"]).set_file_name(name).save_file() {
-                        match serde_json::to_string_pretty(s).map_err(|e| e.to_string()).and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string())) {
-                            Ok(()) => self.toast(ToastKind::Success, "Snapshot saved", path.display().to_string()),
+                    let name = format!(
+                        "usb-snapshot-{}.json",
+                        chrono::Local::now().format("%Y%m%d-%H%M%S")
+                    );
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Snapshot", &["json"])
+                        .set_file_name(name)
+                        .save_file()
+                    {
+                        match serde_json::to_string_pretty(s)
+                            .map_err(|e| e.to_string())
+                            .and_then(|j| std::fs::write(&path, j).map_err(|e| e.to_string()))
+                        {
+                            Ok(()) => self.toast(
+                                ToastKind::Success,
+                                "Snapshot saved",
+                                path.display().to_string(),
+                            ),
                             Err(e) => self.toast(ToastKind::Error, "Save failed", e),
                         }
                     }
                 }
             }
             Action::OpenSnapshot => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Snapshot", &["json"]).pick_file() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Snapshot", &["json"])
+                    .pick_file()
+                {
                     self.load_snapshot_file(path);
                 }
             }
@@ -624,16 +838,36 @@ impl App {
                 let html = matches!(a, Action::ExportHtml);
                 if let Some(s) = &self.snapshot {
                     let (ext, content) = if html {
-                        ("html", crate::export::html_report(s, self.settings.hexdumps_in_reports))
+                        (
+                            "html",
+                            crate::export::html_report(s, self.settings.hexdumps_in_reports),
+                        )
                     } else {
-                        ("txt", crate::details::full_report(s, self.settings.hexdumps_in_reports))
+                        (
+                            "txt",
+                            crate::details::full_report(s, self.settings.hexdumps_in_reports),
+                        )
                     };
-                    let name = format!("usb-report-{}.{ext}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-                    if let Some(path) = rfd::FileDialog::new().add_filter(ext.to_uppercase(), &[ext]).set_file_name(name).save_file() {
+                    let name = format!(
+                        "usb-report-{}.{ext}",
+                        chrono::Local::now().format("%Y%m%d-%H%M%S")
+                    );
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(ext.to_uppercase(), &[ext])
+                        .set_file_name(name)
+                        .save_file()
+                    {
                         match std::fs::write(&path, content) {
                             Ok(()) => {
                                 let p = path.display().to_string();
-                                self.toasts.push(Toast::new(ToastKind::Success, "Report exported".into(), p.clone()).with_open(p));
+                                self.toasts.push(
+                                    Toast::new(
+                                        ToastKind::Success,
+                                        "Report exported".into(),
+                                        p.clone(),
+                                    )
+                                    .with_open(p),
+                                );
                             }
                             Err(e) => self.toast(ToastKind::Error, "Export failed", e.to_string()),
                         }
@@ -641,11 +875,26 @@ impl App {
                 }
             }
             Action::Compare => {
-                if let (Some(cur), Some(path)) = (&self.snapshot, rfd::FileDialog::new().add_filter("Snapshot", &["json"]).pick_file()) {
-                    match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| serde_json::from_str::<Snapshot>(&s).map_err(|e| e.to_string())) {
+                if let (Some(cur), Some(path)) = (
+                    &self.snapshot,
+                    rfd::FileDialog::new()
+                        .add_filter("Snapshot", &["json"])
+                        .pick_file(),
+                ) {
+                    match std::fs::read_to_string(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|s| {
+                            serde_json::from_str::<Snapshot>(&s).map_err(|e| e.to_string())
+                        }) {
                         Ok(other) => {
                             let changes = tree::diff(&other, cur);
-                            self.compare = Some(CompareState { name: path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), changes });
+                            self.compare = Some(CompareState {
+                                name: path
+                                    .file_name()
+                                    .map(|f| f.to_string_lossy().to_string())
+                                    .unwrap_or_default(),
+                                changes,
+                            });
                         }
                         Err(e) => self.toast(ToastKind::Error, "Could not read snapshot", e),
                     }
@@ -660,7 +909,11 @@ impl App {
             }
             Action::ToggleTheme => {
                 let dark_now = self.p.dark;
-                self.settings.theme = if dark_now { ThemeMode::Light } else { ThemeMode::Dark };
+                self.settings.theme = if dark_now {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                };
                 self.apply_theme(ctx);
                 self.settings.save();
             }
@@ -674,10 +927,37 @@ impl App {
                 self.rebuild();
                 self.settings.save();
             }
+            Action::TogglePhysical => {
+                self.settings.physical_tree = !self.settings.physical_tree;
+                self.rebuild();
+                self.settings.save();
+                self.scroll_to_selected = true;
+                self.toast(
+                    ToastKind::Info,
+                    if self.settings.physical_tree {
+                        "Physical sockets"
+                    } else {
+                        "Logical ports"
+                    },
+                    if self.settings.physical_tree {
+                        "Companion ports are merged into one row per physical socket."
+                    } else {
+                        "Showing every logical port as Windows reports it."
+                    },
+                );
+            }
             Action::ToggleLive => {
                 self.settings.auto_refresh = !self.settings.auto_refresh;
                 self.settings.save();
-                self.toast(ToastKind::Info, if self.settings.auto_refresh { "Live updates on" } else { "Live updates paused" }, "");
+                self.toast(
+                    ToastKind::Info,
+                    if self.settings.auto_refresh {
+                        "Live updates on"
+                    } else {
+                        "Live updates paused"
+                    },
+                    "",
+                );
             }
             Action::ExpandAll => self.collapsed.clear(),
             Action::CollapseAll => {
@@ -710,6 +990,24 @@ impl App {
                 self.palette_sel = 0;
             }
             Action::OpenSettings => self.settings_open = true,
+            Action::ToggleMapLegend => map::toggle_legend(self),
+            Action::OpenLesson(c) => {
+                self.learn.open(c);
+                self.view = ViewMode::Learn;
+            }
+            Action::SetView(v) => {
+                self.view = v;
+                if v != ViewMode::Learn {
+                    self.settings.map_view = v == ViewMode::Map;
+                }
+                if v == ViewMode::Learn {
+                    self.learn.needs_reset = true;
+                }
+                self.settings.save();
+                if v == ViewMode::Tree {
+                    self.scroll_to_selected = true;
+                }
+            }
             Action::About => self.about_open = true,
         }
     }
@@ -718,10 +1016,14 @@ impl App {
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
         let mut acts = Vec::new();
         ctx.input_mut(|i| {
-            if i.consume_shortcut(&sc(Modifiers::NONE, Key::F5)) || i.consume_shortcut(&sc(Modifiers::COMMAND, Key::R)) {
+            if i.consume_shortcut(&sc(Modifiers::NONE, Key::F5))
+                || i.consume_shortcut(&sc(Modifiers::COMMAND, Key::R))
+            {
                 acts.push(Action::Refresh);
             }
-            if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::K)) || i.consume_shortcut(&sc(Modifiers::COMMAND, Key::P)) {
+            if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::K))
+                || i.consume_shortcut(&sc(Modifiers::COMMAND, Key::P))
+            {
                 acts.push(Action::OpenPalette);
             }
             if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::F)) {
@@ -738,6 +1040,15 @@ impl App {
             }
             if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::E)) {
                 acts.push(Action::ExportHtml);
+            }
+            if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::Num1)) {
+                acts.push(Action::SetView(ViewMode::Tree));
+            }
+            if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::Num2)) {
+                acts.push(Action::SetView(ViewMode::Map));
+            }
+            if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::Num3)) {
+                acts.push(Action::SetView(ViewMode::Learn));
             }
             if i.consume_shortcut(&sc(Modifiers::COMMAND, Key::J)) {
                 self.bottom_open = !self.bottom_open;
@@ -797,7 +1108,10 @@ impl eframe::App for App {
             }
         }
         // Keep animations (arrival glow, ghosts, toasts) ticking.
-        let animating = self.arrivals.values().any(|t| t.elapsed() < Duration::from_secs(6))
+        let animating = self
+            .arrivals
+            .values()
+            .any(|t| t.elapsed() < Duration::from_secs(6))
             || !self.ghosts.is_empty()
             || !self.toasts.is_empty()
             || self.scanning;
@@ -805,13 +1119,21 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         let before = self.ghosts.len();
-        self.ghosts.retain(|g| g.at.elapsed() < Duration::from_secs(8));
-        self.arrivals.retain(|_, t| t.elapsed() < Duration::from_secs(8));
+        self.ghosts
+            .retain(|g| g.at.elapsed() < Duration::from_secs(8));
+        self.arrivals
+            .retain(|_, t| t.elapsed() < Duration::from_secs(8));
         if before != self.ghosts.len() {
             self.rebuild();
         }
         // Dropped snapshot files.
-        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
         if let Some(p) = dropped.into_iter().next() {
             self.dispatch(Action::OpenSnapshotPath(p));
         }
@@ -830,17 +1152,45 @@ impl eframe::App for App {
         bottom::show(self, ui);
 
         let p = self.p;
+        if self.view != ViewMode::Tree {
+            if self.view == ViewMode::Map {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(p.bg))
+                    .show(ui, |ui| {
+                        map::show(self, ui);
+                    });
+            } else {
+                learn::show(self, ui);
+            }
+            palette::show(self, &ctx);
+            self.dialogs(&ctx);
+            toasts::show(self, &ctx);
+            let actions = std::mem::take(&mut self.pending);
+            for a in actions {
+                self.handle(a, &ctx, false);
+            }
+            return;
+        }
         egui::Panel::left("tree")
             .resizable(true)
             .default_size(self.settings.tree_width)
             .size_range(280.0..=900.0)
-            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin { left: 8, right: 4, top: 8, bottom: 8 }))
+            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin {
+                left: 8,
+                right: 4,
+                top: 8,
+                bottom: 8,
+            }))
             .show(ui, |ui| {
                 tree_view::show(self, ui);
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::same(0)))
+            .frame(
+                egui::Frame::new()
+                    .fill(p.bg)
+                    .inner_margin(egui::Margin::same(0)),
+            )
             .show(ui, |ui| {
                 detail_view::show(self, ui);
             });
@@ -868,139 +1218,323 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let p = self.p;
         egui::Panel::top("top")
-            .exact_size(52.0)
-            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(14, 10)).stroke(egui::Stroke::new(1.0, p.border)))
+            .exact_size(56.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.panel)
+                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .stroke(egui::Stroke::new(1.0, p.border)),
+            )
             .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    // Brand
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                    ui.painter().rect_filled(r, egui::CornerRadius::same(8), p.accent);
-                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, ph::TREE_STRUCTURE, theme::icon_fill(17.0), if p.dark { p.bg } else { egui::Color32::WHITE });
-                    ui.label(egui::RichText::new(APP_NAME).font(theme::semibold(15.5)).color(p.text));
-                    ui.add_space(14.0);
-
-                    // Search
-                    let search_w = (ui.available_width() * 0.34).clamp(200.0, 420.0);
-                    egui::Frame::new()
-                        .fill(if p.dark { p.bg } else { p.card })
-                        .stroke(egui::Stroke::new(1.0, p.border))
-                        .corner_radius(egui::CornerRadius::same(9))
-                        .inner_margin(egui::Margin::symmetric(10, 4))
-                        .show(ui, |ui| {
-                            ui.set_width(search_w);
-                            ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(ph::MAGNIFYING_GLASS).color(p.text_muted));
-                                let resp = ui.add(
-                                    egui::TextEdit::singleline(&mut self.search)
-                                        .hint_text("Search devices, VID:PID, drive, serial…")
-                                        .frame(egui::Frame::NONE)
-                                        .desired_width(search_w - 70.0),
-                                );
-                                if self.focus_search {
-                                    resp.request_focus();
-                                    self.focus_search = false;
-                                }
-                                if resp.changed() && !self.search.is_empty() {
-                                    self.scroll_to_selected = true;
-                                }
-                                if !self.search.is_empty() {
-                                    if widgets::icon_button(ui, &p, ph::X, "Clear search").clicked() {
-                                        self.search.clear();
-                                    }
+                // Right-hand controls are laid out first and measured, so the
+                // left side (views, search, filters) only uses the space that is
+                // actually left and can never be covered.
+                let full = ui.max_rect();
+                let right = ui
+                    .scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(full)
+                            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                        |ui| {
+                            ui.menu_button(
+                                egui::RichText::new(ph::DOTS_THREE_VERTICAL).size(18.0),
+                                |ui| self.main_menu(ui),
+                            );
+                            let theme_icon = if p.dark { ph::SUN } else { ph::MOON };
+                            if widgets::icon_button(
+                                ui,
+                                &p,
+                                theme_icon,
+                                "Toggle light/dark (Ctrl+Shift+L)",
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Action::ToggleTheme);
+                            }
+                            if widgets::icon_button(ui, &p, ph::COMMAND, "Command palette (Ctrl+K)")
+                                .clicked()
+                            {
+                                self.dispatch(Action::OpenPalette);
+                            }
+                            let empty_icon = if self.settings.show_empty_ports {
+                                ph::CIRCLE_DASHED
+                            } else {
+                                ph::PLUGS_CONNECTED
+                            };
+                            if widgets::icon_button(
+                                ui,
+                                &p,
+                                empty_icon,
+                                if self.settings.show_empty_ports {
+                                    "Hide empty ports"
                                 } else {
-                                    ui.label(egui::RichText::new("Ctrl F").size(11.0).color(p.text_faint));
-                                }
-                            });
-                        });
-                    ui.add_space(6.0);
-                    let mut qf = self.quick_filter;
-                    let problems = self.insights.iter().filter(|i| i.severity >= insights::Severity::Warning).count();
-                    let prob_label = if problems > 0 { format!("{} Problems {problems}", ph::WARNING) } else { format!("{} Problems", ph::WARNING) };
-                    widgets::segmented(
-                        ui,
-                        &p,
-                        "quick-filter",
-                        &mut qf,
-                        &[
-                            (QuickFilter::All, "All"),
-                            (QuickFilter::Problems, prob_label.as_str()),
-                            (QuickFilter::SuperSpeed, "USB 3"),
-                            (QuickFilter::Storage, "Storage"),
-                            (QuickFilter::Input, "Input"),
-                        ],
-                    );
-                    self.quick_filter = qf;
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.menu_button(egui::RichText::new(ph::DOTS_THREE_VERTICAL).size(18.0), |ui| self.main_menu(ui));
-                        let theme_icon = if p.dark { ph::SUN } else { ph::MOON };
-                        if widgets::icon_button(ui, &p, theme_icon, "Toggle light/dark (Ctrl+Shift+L)").clicked() {
-                            self.dispatch(Action::ToggleTheme);
-                        }
-                        if widgets::icon_button(ui, &p, ph::COMMAND, "Command palette (Ctrl+K)").clicked() {
-                            self.dispatch(Action::OpenPalette);
-                        }
-                        let empty_icon = if self.settings.show_empty_ports { ph::CIRCLE_DASHED } else { ph::PLUGS_CONNECTED };
-                        if widgets::icon_button(ui, &p, empty_icon, if self.settings.show_empty_ports { "Hide empty ports" } else { "Show empty ports" }).clicked() {
-                            self.dispatch(Action::ToggleEmptyPorts);
-                        }
-                        // Refresh with spinning icon while scanning.
-                        let (r, resp) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
-                        let resp = resp.on_hover_text("Refresh (F5)").on_hover_cursor(egui::CursorIcon::PointingHand);
-                        if resp.hovered() {
-                            ui.painter().rect_filled(r, egui::CornerRadius::same(8), p.card_hover);
-                        }
-                        if self.scanning {
-                            let t = ui.input(|i| i.time) as f32;
-                            let c = r.center();
-                            let rad = 7.5;
-                            let start = t * 6.0;
-                            let pts: Vec<egui::Pos2> = (0..=24)
-                                .map(|k| {
-                                    let a = start + k as f32 / 24.0 * std::f32::consts::PI * 1.5;
-                                    c + egui::vec2(a.cos(), a.sin()) * rad
-                                })
-                                .collect();
-                            ui.painter().add(egui::Shape::line(pts, egui::Stroke::new(2.0, p.accent)));
-                        } else {
-                            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, ph::ARROWS_CLOCKWISE, egui::FontId::proportional(17.0), if resp.hovered() { p.text } else { p.text_muted });
-                        }
-                        if resp.clicked() {
-                            self.dispatch(Action::Refresh);
-                        }
-                        // Live indicator
-                        if self.is_live() {
-                            let live = self.settings.auto_refresh;
-                            let color = if live { p.ok } else { p.text_faint };
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(62.0, 26.0), egui::Sense::click());
+                                    "Show empty ports"
+                                },
+                            )
+                            .clicked()
+                            {
+                                self.dispatch(Action::ToggleEmptyPorts);
+                            }
+                            // Refresh with spinning icon while scanning.
+                            let (r, resp) = ui
+                                .allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
                             let resp = resp
-                                .on_hover_text(if live { "Watching for device changes – click to pause" } else { "Paused – click to resume live updates" })
+                                .on_hover_text("Refresh (F5)")
                                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            ui.painter().rect_filled(r, egui::CornerRadius::same(255), p.soft(color));
-                            let dot_c = egui::pos2(r.left() + 13.0, r.center().y);
-                            if live {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(
+                                    r,
+                                    egui::CornerRadius::same(8),
+                                    p.card_hover,
+                                );
+                            }
+                            if self.scanning {
                                 let t = ui.input(|i| i.time) as f32;
-                                let pulse = (t * 2.0).sin() * 0.5 + 0.5;
-                                ui.painter().circle_filled(dot_c, 3.5 + pulse * 3.0, theme::with_alpha(color, 0.25 * (1.0 - pulse)));
-                                ui.ctx().request_repaint_after(Duration::from_millis(50));
+                                let c = r.center();
+                                let rad = 7.5;
+                                let start = t * 6.0;
+                                let pts: Vec<egui::Pos2> = (0..=24)
+                                    .map(|k| {
+                                        let a =
+                                            start + k as f32 / 24.0 * std::f32::consts::PI * 1.5;
+                                        c + egui::vec2(a.cos(), a.sin()) * rad
+                                    })
+                                    .collect();
+                                ui.painter()
+                                    .add(egui::Shape::line(pts, egui::Stroke::new(2.0, p.accent)));
+                            } else {
+                                ui.painter().text(
+                                    r.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    ph::ARROWS_CLOCKWISE,
+                                    egui::FontId::proportional(17.0),
+                                    if resp.hovered() { p.text } else { p.text_muted },
+                                );
                             }
-                            ui.painter().circle_filled(dot_c, 3.5, color);
-                            ui.painter().text(egui::pos2(r.left() + 22.0, r.center().y), egui::Align2::LEFT_CENTER, if live { "Live" } else { "Paused" }, egui::FontId::proportional(12.0), color);
                             if resp.clicked() {
-                                self.dispatch(Action::ToggleLive);
+                                self.dispatch(Action::Refresh);
                             }
-                        } else if ui.add(egui::Button::new(egui::RichText::new(format!("{}  Back to live", ph::PULSE)).color(p.accent))).clicked() {
-                            self.dispatch(Action::BackToLive);
+                            // Live indicator
+                            if self.is_live() {
+                                let live = self.settings.auto_refresh;
+                                let color = if live { p.ok } else { p.text_faint };
+                                let (r, resp) = ui.allocate_exact_size(
+                                    egui::vec2(62.0, 26.0),
+                                    egui::Sense::click(),
+                                );
+                                let resp = resp
+                                    .on_hover_text(if live {
+                                        "Watching for device changes – click to pause"
+                                    } else {
+                                        "Paused – click to resume live updates"
+                                    })
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                ui.painter().rect_filled(
+                                    r,
+                                    egui::CornerRadius::same(255),
+                                    p.soft(color),
+                                );
+                                let dot_c = egui::pos2(r.left() + 13.0, r.center().y);
+                                if live {
+                                    let t = ui.input(|i| i.time) as f32;
+                                    let pulse = (t * 2.0).sin() * 0.5 + 0.5;
+                                    ui.painter().circle_filled(
+                                        dot_c,
+                                        3.5 + pulse * 3.0,
+                                        theme::with_alpha(color, 0.25 * (1.0 - pulse)),
+                                    );
+                                    ui.ctx().request_repaint_after(Duration::from_millis(50));
+                                }
+                                ui.painter().circle_filled(dot_c, 3.5, color);
+                                ui.painter().text(
+                                    egui::pos2(r.left() + 22.0, r.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    if live { "Live" } else { "Paused" },
+                                    egui::FontId::proportional(12.0),
+                                    color,
+                                );
+                                if resp.clicked() {
+                                    self.dispatch(Action::ToggleLive);
+                                }
+                            } else if ui
+                                .add(egui::Button::new(
+                                    egui::RichText::new(format!("{}  Back to live", ph::PULSE))
+                                        .color(p.accent),
+                                ))
+                                .clicked()
+                            {
+                                self.dispatch(Action::BackToLive);
+                            }
+                        },
+                    )
+                    .response
+                    .rect;
+                let left_rect = egui::Rect::from_min_max(
+                    full.min,
+                    egui::pos2((right.left() - 12.0).max(full.left()), full.max.y),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(left_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| {
+                        // Clip horizontally only, so tall controls keep their bottom edge.
+                        ui.set_clip_rect(egui::Rect::from_x_y_ranges(
+                            left_rect.x_range(),
+                            ui.clip_rect().y_range(),
+                        ));
+                        let compact = left_rect.width() < 760.0;
+                        // Brand
+                        icon::logo(ui, 30.0);
+                        if !compact {
+                            ui.label(
+                                egui::RichText::new(APP_NAME)
+                                    .font(theme::semibold(15.5))
+                                    .color(p.text),
+                            );
                         }
-                    });
-                });
+                        ui.add_space(10.0);
+                        let mut v = self.view;
+                        let (tree_l, map_l, learn_l) = if compact {
+                            (
+                                ph::TREE_VIEW.to_string(),
+                                ph::GRAPH.to_string(),
+                                ph::GRADUATION_CAP.to_string(),
+                            )
+                        } else {
+                            (
+                                format!("{}  Tree", ph::TREE_VIEW),
+                                format!("{}  Map", ph::GRAPH),
+                                format!("{}  Learn", ph::GRADUATION_CAP),
+                            )
+                        };
+                        if widgets::segmented(
+                            ui,
+                            &p,
+                            "view-mode",
+                            &mut v,
+                            &[
+                                (ViewMode::Tree, tree_l.as_str()),
+                                (ViewMode::Map, map_l.as_str()),
+                                (ViewMode::Learn, learn_l.as_str()),
+                            ],
+                        ) {
+                            self.dispatch(Action::SetView(v));
+                        }
+                        ui.add_space(10.0);
+
+                        // Search + quick filters (not shown in the guide). The right-hand
+                        // controls need ~300 px; filters collapse into a menu when tight.
+                        let room = ui.available_width();
+                        if self.view != ViewMode::Learn && room < 250.0 {
+                            // Too narrow for a search box: offer the palette instead.
+                            if widgets::icon_button(ui, &p, ph::MAGNIFYING_GLASS, "Search (Ctrl+K)")
+                                .clicked()
+                            {
+                                self.dispatch(Action::OpenPalette);
+                            }
+                        } else if self.view != ViewMode::Learn {
+                            let problems = self
+                                .insights
+                                .iter()
+                                .filter(|i| i.severity >= insights::Severity::Warning)
+                                .count();
+                            let prob_label = if problems > 0 {
+                                format!("{} Problems {problems}", ph::WARNING)
+                            } else {
+                                format!("{} Problems", ph::WARNING)
+                            };
+                            // Measure the filter group so the search box takes exactly
+                            // what is left (frame margins + gap = 32 px).
+                            let filters_w = widgets::segmented_width(
+                                ui,
+                                &["All", prob_label.as_str(), "USB 3", "Storage", "Input"],
+                            );
+                            let wide = room - filters_w - 32.0 >= 170.0;
+                            let search_w = if wide {
+                                (room - filters_w - 32.0).min(380.0)
+                            } else {
+                                (room - 150.0).clamp(120.0, 380.0)
+                            };
+                            egui::Frame::new()
+                                .fill(if p.dark { p.bg } else { p.card })
+                                .stroke(egui::Stroke::new(1.0, p.border))
+                                .corner_radius(egui::CornerRadius::same(9))
+                                .inner_margin(egui::Margin::symmetric(10, 4))
+                                .show(ui, |ui| {
+                                    ui.set_width(search_w);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(ph::MAGNIFYING_GLASS)
+                                                .color(p.text_muted),
+                                        );
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut self.search)
+                                                .hint_text(
+                                                    "Search devices, VID:PID, drive, serial…",
+                                                )
+                                                .frame(egui::Frame::NONE)
+                                                .desired_width(search_w - 70.0),
+                                        );
+                                        if self.focus_search {
+                                            resp.request_focus();
+                                            self.focus_search = false;
+                                        }
+                                        if resp.changed() && !self.search.is_empty() {
+                                            self.scroll_to_selected = true;
+                                        }
+                                        if !self.search.is_empty() {
+                                            if widgets::icon_button(ui, &p, ph::X, "Clear search")
+                                                .clicked()
+                                            {
+                                                self.search.clear();
+                                            }
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("Ctrl F")
+                                                    .size(11.0)
+                                                    .color(p.text_faint),
+                                            );
+                                        }
+                                    });
+                                });
+                            ui.add_space(6.0);
+                            let mut qf = self.quick_filter;
+                            let filters = [
+                                (QuickFilter::All, "All"),
+                                (QuickFilter::Problems, prob_label.as_str()),
+                                (QuickFilter::SuperSpeed, "USB 3"),
+                                (QuickFilter::Storage, "Storage"),
+                                (QuickFilter::Input, "Input"),
+                            ];
+                            if wide {
+                                widgets::segmented(ui, &p, "quick-filter", &mut qf, &filters);
+                            } else {
+                                let cur = filters
+                                    .iter()
+                                    .find(|f| f.0 == qf)
+                                    .map(|f| f.1.to_string())
+                                    .unwrap_or_default();
+                                ui.menu_button(format!("{}  {cur}", ph::FUNNEL), |ui| {
+                                    for (f, name) in filters {
+                                        if ui.selectable_label(qf == f, name).clicked() {
+                                            qf = f;
+                                        }
+                                    }
+                                });
+                            }
+                            self.quick_filter = qf;
+                        }
+                    },
+                );
             });
     }
 
     fn main_menu(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(250.0);
         let item = |ui: &mut egui::Ui, icon: &str, text: &str, sc: &str| -> bool {
-            ui.add(egui::Button::new(format!("{icon}   {text}")).shortcut_text(sc)).clicked()
+            ui.add(egui::Button::new(format!("{icon}   {text}")).shortcut_text(sc))
+                .clicked()
         };
         if item(ui, ph::FOLDER_OPEN, "Open snapshot…", "Ctrl+O") {
             self.dispatch(Action::OpenSnapshot);
@@ -1028,7 +1562,19 @@ impl App {
         if item(ui, ph::LIST, "Collapse all", "") {
             self.dispatch(Action::CollapseAll);
         }
-        let child_label = if self.settings.show_child_devices { "Hide Windows child devices" } else { "Show Windows child devices" };
+        let phys_label = if self.settings.physical_tree {
+            "Show logical ports (like USBTreeView)"
+        } else {
+            "Merge companion ports into physical sockets"
+        };
+        if item(ui, ph::PLUG, phys_label, "") {
+            self.dispatch(Action::TogglePhysical);
+        }
+        let child_label = if self.settings.show_child_devices {
+            "Hide Windows child devices"
+        } else {
+            "Show Windows child devices"
+        };
         if item(ui, ph::STACK, child_label, "") {
             self.dispatch(Action::ToggleChildDevices);
         }
@@ -1048,6 +1594,9 @@ impl App {
         if item(ui, ph::GEAR, "Settings", "Ctrl+,") {
             self.dispatch(Action::OpenSettings);
         }
+        if item(ui, ph::GRADUATION_CAP, "USB guide", "Ctrl+3") {
+            self.dispatch(Action::SetView(ViewMode::Learn));
+        }
         if item(ui, ph::INFO, &format!("About {APP_NAME}"), "") {
             self.dispatch(Action::About);
         }
@@ -1057,46 +1606,126 @@ impl App {
         let p = self.p;
         egui::Panel::bottom("status")
             .exact_size(26.0)
-            .frame(egui::Frame::new().fill(p.panel).inner_margin(egui::Margin::symmetric(12, 4)).stroke(egui::Stroke::new(1.0, p.border)))
+            .frame(
+                egui::Frame::new()
+                    .fill(p.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 4))
+                    .stroke(egui::Stroke::new(1.0, p.border)),
+            )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let small = |t: String, c: egui::Color32| egui::RichText::new(t).size(11.5).color(c);
+                    let small =
+                        |t: String, c: egui::Color32| egui::RichText::new(t).size(11.5).color(c);
                     match &self.source {
                         Source::Live => {
                             ui.label(small(format!("{}  Live system", ph::PULSE), p.text_muted));
                         }
                         Source::File(f) => {
-                            ui.label(small(format!("{}  Snapshot: {}", ph::FLOPPY_DISK, f.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_default()), p.warn));
+                            ui.label(small(
+                                format!(
+                                    "{}  Snapshot: {}",
+                                    ph::FLOPPY_DISK,
+                                    f.file_name()
+                                        .map(|x| x.to_string_lossy().to_string())
+                                        .unwrap_or_default()
+                                ),
+                                p.warn,
+                            ));
                         }
                         Source::Demo => {
                             ui.label(small(format!("{}  Demo data", ph::SPARKLE), p.warn));
                         }
                     }
                     if let Some(s) = &self.snapshot {
-                        let devs = self.flat.nodes.iter().filter(|n| matches!(n.kind, tree::NodeKind::Device | tree::NodeKind::Hub)).count();
-                        ui.label(small(format!("·  {} controllers  ·  {devs} devices  ·  scanned in {} ms  ·  {}", s.controllers.len(), s.scan_ms, s.taken_at), p.text_faint));
+                        let devs = self
+                            .flat
+                            .nodes
+                            .iter()
+                            .filter(|n| {
+                                matches!(n.kind, tree::NodeKind::Device | tree::NodeKind::Hub)
+                            })
+                            .count();
+                        ui.label(small(
+                            format!(
+                                "·  {} controllers  ·  {devs} devices  ·  scanned in {} ms  ·  {}",
+                                s.controllers.len(),
+                                s.scan_ms,
+                                s.taken_at
+                            ),
+                            p.text_faint,
+                        ));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if platform::is_admin() {
                             ui.label(small(format!("{}  Administrator", ph::SHIELD_CHECK), p.ok));
                         } else if ui
-                            .add(egui::Label::new(small(format!("{}  Standard user – click to elevate", ph::SHIELD_WARNING), p.text_muted)).sense(egui::Sense::click()))
-                            .on_hover_text("Restart, cycle port and enable/disable need administrator rights")
+                            .add(
+                                egui::Label::new(small(
+                                    format!(
+                                        "{}  Standard user – click to elevate",
+                                        ph::SHIELD_WARNING
+                                    ),
+                                    p.text_muted,
+                                ))
+                                .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(
+                                "Restart, cycle port and enable/disable need administrator rights",
+                            )
                             .clicked()
                         {
                             self.dispatch(Action::RunAsAdmin);
                         }
-                        let n_err = self.insights.iter().filter(|i| i.severity == insights::Severity::Error).count();
-                        let n_warn = self.insights.iter().filter(|i| i.severity == insights::Severity::Warning).count();
-                        let n_info = self.insights.iter().filter(|i| i.severity == insights::Severity::Info).count();
-                        let txt = format!("{} {n_err}   {} {n_warn}   {} {n_info}", ph::X_CIRCLE, ph::WARNING, ph::LIGHTBULB);
-                        let col = if n_err > 0 { p.error } else if n_warn > 0 { p.warn } else { p.text_muted };
-                        if ui.add(egui::Label::new(small(txt, col)).sense(egui::Sense::click())).on_hover_text("Show insights (Ctrl+J)").clicked() {
+                        let n_err = self
+                            .insights
+                            .iter()
+                            .filter(|i| i.severity == insights::Severity::Error)
+                            .count();
+                        let n_warn = self
+                            .insights
+                            .iter()
+                            .filter(|i| i.severity == insights::Severity::Warning)
+                            .count();
+                        let n_info = self
+                            .insights
+                            .iter()
+                            .filter(|i| i.severity == insights::Severity::Info)
+                            .count();
+                        let txt = format!(
+                            "{} {n_err}   {} {n_warn}   {} {n_info}",
+                            ph::X_CIRCLE,
+                            ph::WARNING,
+                            ph::LIGHTBULB
+                        );
+                        let col = if n_err > 0 {
+                            p.error
+                        } else if n_warn > 0 {
+                            p.warn
+                        } else {
+                            p.text_muted
+                        };
+                        if ui
+                            .add(egui::Label::new(small(txt, col)).sense(egui::Sense::click()))
+                            .on_hover_text("Show insights (Ctrl+J)")
+                            .clicked()
+                        {
                             self.bottom_open = true;
                             self.bottom_tab = BottomTab::Insights;
                         }
                         if !self.events.is_empty()
-                            && ui.add(egui::Label::new(small(format!("{}  {} events", ph::CLOCK_COUNTER_CLOCKWISE, self.events.len()), p.text_muted)).sense(egui::Sense::click())).clicked()
+                            && ui
+                                .add(
+                                    egui::Label::new(small(
+                                        format!(
+                                            "{}  {} events",
+                                            ph::CLOCK_COUNTER_CLOCKWISE,
+                                            self.events.len()
+                                        ),
+                                        p.text_muted,
+                                    ))
+                                    .sense(egui::Sense::click()),
+                                )
+                                .clicked()
                         {
                             self.bottom_open = true;
                             self.bottom_tab = BottomTab::Activity;
@@ -1123,7 +1752,15 @@ impl App {
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Continue").color(egui::Color32::WHITE)).fill(p.accent)).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Continue").color(egui::Color32::WHITE),
+                                )
+                                .fill(p.accent),
+                            )
+                            .clicked()
+                        {
                             decision = Some(true);
                         }
                         if ui.button("Cancel").clicked() {
@@ -1148,7 +1785,13 @@ impl App {
             egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
                 ui.set_width(360.0);
                 ui.label(egui::RichText::new("Nickname").font(theme::semibold(16.0)));
-                ui.label(egui::RichText::new("Shown instead of the device name. Stored per device (VID:PID + serial).").color(p.text_muted).size(12.0));
+                ui.label(
+                    egui::RichText::new(
+                        "Shown instead of the device name. Stored per device (VID:PID + serial).",
+                    )
+                    .color(p.text_muted)
+                    .size(12.0),
+                );
                 ui.add_space(6.0);
                 let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
                 r.request_focus();
@@ -1162,7 +1805,15 @@ impl App {
                         done = Some(true);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Save").color(egui::Color32::WHITE)).fill(p.accent)).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("Save").color(egui::Color32::WHITE),
+                                )
+                                .fill(p.accent),
+                            )
+                            .clicked()
+                        {
                             done = Some(true);
                         }
                         if ui.button("Cancel").clicked() {
@@ -1179,7 +1830,11 @@ impl App {
                 Some(false) => {}
                 Some(true) => {
                     if let Some(key) = self.flat.get(&id).and_then(|n| self.device_key(n)) {
-                        let label = self.flat.get(&id).map(|n| n.label.clone()).unwrap_or_default();
+                        let label = self
+                            .flat
+                            .get(&id)
+                            .map(|n| n.label.clone())
+                            .unwrap_or_default();
                         if text.trim().is_empty() || text.trim() == label {
                             self.settings.nicknames.remove(&key);
                         } else {
@@ -1237,7 +1892,7 @@ impl App {
             let mut open = true;
             egui::Window::new(format!("About {APP_NAME}")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    widgets::icon_tile(ui, &p, ph::TREE_STRUCTURE, 48.0, p.accent);
+                    icon::logo(ui, 48.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(APP_NAME).font(theme::semibold(18.0)));
                         ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(p.text_muted));
@@ -1250,6 +1905,7 @@ impl App {
                 ui.label(egui::RichText::new("Shortcuts").strong());
                 for (k, v) in [
                     ("F5 / Ctrl+R", "Refresh"),
+                    ("Ctrl+1 / 2 / 3", "Tree / Map / Learn"),
                     ("Ctrl+K", "Command palette"),
                     ("Ctrl+F", "Search"),
                     ("↑ ↓ ← →", "Navigate the tree"),
@@ -1269,12 +1925,135 @@ impl App {
         }
     }
 
+    /// "Connection colors" settings section. Returns true when colors changed.
+    fn connection_colors_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let p = self.p;
+        let mut changed = false;
+        egui::CollapsingHeader::new(
+            egui::RichText::new("Connection colors").font(theme::semibold(14.0)),
+        )
+        .id_salt("conn-colors")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "Used for link lines in the Map, speed pills, the speed ladder and charts.",
+                )
+                .size(12.0)
+                .color(p.text_muted),
+            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Preset");
+                for (name, preset) in theme::LinkColors::presets() {
+                    let active = self.settings.link_colors == preset;
+                    if ui.selectable_label(active, name).clicked() {
+                        self.settings.link_colors = preset;
+                        changed = true;
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            let names = [
+                "Low Speed · 1.5 Mbit/s",
+                "Full Speed · 12 Mbit/s",
+                "High Speed · 480 Mbit/s",
+                "SuperSpeed · 5 Gbit/s",
+                "SuperSpeed+ · 10 Gbit/s",
+                "SuperSpeed+ · 20 Gbit/s",
+            ];
+            egui::Grid::new("link-color-grid")
+                .num_columns(4)
+                .spacing([10.0, 6.0])
+                .show(ui, |ui| {
+                    for (i, name) in names.iter().enumerate() {
+                        let speed = theme::LINK_SPEEDS[i];
+                        let current = p.speed(speed);
+                        let mut rgb = [current.r(), current.g(), current.b()];
+                        if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                            self.settings.link_colors.speeds[i] = Some(rgb);
+                            changed = true;
+                        }
+                        ui.label(*name);
+                        link_preview(ui, current, speed);
+                        if self.settings.link_colors.speeds[i].is_some() {
+                            if ui
+                                .small_button("Reset")
+                                .on_hover_text("Back to the theme color")
+                                .clicked()
+                            {
+                                self.settings.link_colors.speeds[i] = None;
+                                changed = true;
+                            }
+                        } else {
+                            ui.label("");
+                        }
+                        ui.end_row();
+                    }
+                    let mut extra = |ui: &mut egui::Ui,
+                                     label: &str,
+                                     cur: egui::Color32,
+                                     slot: &mut Option<[u8; 3]>,
+                                     dashed: bool| {
+                        let mut rgb = [cur.r(), cur.g(), cur.b()];
+                        if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                            *slot = Some(rgb);
+                            changed = true;
+                        }
+                        ui.label(label);
+                        let (r, _) =
+                            ui.allocate_exact_size(egui::vec2(70.0, 12.0), egui::Sense::hover());
+                        if dashed {
+                            for s in egui::Shape::dashed_line(
+                                &[r.left_center(), r.right_center()],
+                                egui::Stroke::new(1.5, cur),
+                                4.0,
+                                4.0,
+                            ) {
+                                ui.painter().add(s);
+                            }
+                        } else {
+                            ui.painter().line_segment(
+                                [r.left_center(), r.right_center()],
+                                egui::Stroke::new(7.0, theme::with_alpha(cur, 0.45)),
+                            );
+                        }
+                        if slot.is_some() {
+                            if ui.small_button("Reset").clicked() {
+                                *slot = None;
+                                changed = true;
+                            }
+                        } else {
+                            ui.label("");
+                        }
+                        ui.end_row();
+                    };
+                    let lc = &mut self.settings.link_colors;
+                    extra(ui, "Idle lane (no device)", p.idle_link, &mut lc.idle, true);
+                    extra(
+                        ui,
+                        "Device on a slower lane",
+                        p.slow_lane,
+                        &mut lc.slow_lane,
+                        false,
+                    );
+                });
+            if !self.settings.link_colors.is_default()
+                && ui.button("Reset all connection colors").clicked()
+            {
+                self.settings.link_colors = theme::LinkColors::default();
+                changed = true;
+            }
+        });
+        changed
+    }
+
     fn settings_window(&mut self, ctx: &egui::Context) {
         let p = self.p;
         let mut open = true;
         let mut changed = false;
         let mut retheme = false;
-        egui::Window::new(format!("{}  Settings", ph::GEAR)).open(&mut open).collapsible(false).default_width(420.0).show(ctx, |ui| {
+        egui::Window::new(format!("{}  Settings", ph::GEAR)).open(&mut open).collapsible(false).default_width(470.0).default_height((ctx.content_rect().height() - 120.0).min(720.0)).show(ctx, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.label(egui::RichText::new("Appearance").font(theme::semibold(14.0)));
             ui.horizontal(|ui| {
                 ui.label("Theme");
@@ -1302,10 +2081,17 @@ impl App {
             changed |= ui.checkbox(&mut self.settings.compact_rows, "Compact tree rows").changed();
             changed |= ui.checkbox(&mut self.settings.show_port_numbers, "Show port numbers in the tree").changed();
             ui.add_space(8.0);
+            if self.connection_colors_ui(ui) {
+                retheme = true;
+            }
+            ui.add_space(8.0);
             ui.label(egui::RichText::new("Tree content").font(theme::semibold(14.0)));
             let a = ui.checkbox(&mut self.settings.show_empty_ports, "Show empty ports").changed();
             let b = ui.checkbox(&mut self.settings.show_child_devices, "Show Windows child devices (disks, HID, COM…)").changed();
-            if a || b {
+            let c = ui
+                .checkbox(&mut self.settings.physical_tree, "Physical sockets: merge USB 2 / USB 3 companion ports and hub halves")
+                .changed();
+            if a || b || c {
                 self.rebuild();
                 changed = true;
             }
@@ -1330,6 +2116,7 @@ impl App {
                     changed = true;
                 }
             }
+            });
         });
         if retheme {
             self.apply_theme(ctx);
@@ -1340,4 +2127,25 @@ impl App {
         }
         self.settings_open = open;
     }
+}
+
+/// Small line sample drawn with the width the Map uses for `speed`.
+fn link_preview(ui: &mut egui::Ui, color: egui::Color32, speed: Speed) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(70.0, 12.0), egui::Sense::hover());
+    let w = match speed {
+        Speed::Low | Speed::Unknown => 1.5,
+        Speed::Full => 2.0,
+        Speed::High => 2.8,
+        Speed::Super => 3.8,
+        Speed::SuperPlus => 4.6,
+        Speed::SuperPlus20 => 5.4,
+    };
+    ui.painter().line_segment(
+        [r.left_center(), r.right_center()],
+        egui::Stroke::new(w + 3.0, theme::with_alpha(color, 0.18)),
+    );
+    ui.painter().line_segment(
+        [r.left_center(), r.right_center()],
+        egui::Stroke::new(w, color),
+    );
 }
