@@ -1,0 +1,28 @@
+[package]
+name = "usbtree"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+egui-phosphor = { version = "0.13", default-features = false, features = ["regular", "fill"] }
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
+egui = "0.35.0"
+rfd = "0.17"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation", "Win32_Devices_Usb", "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Properties", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl",
+  "Win32_System_Registry", "Win32_Security", "Win32_System_Threading",
+  "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Console",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
