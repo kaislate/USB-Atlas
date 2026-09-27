@@ -106,6 +106,14 @@ USB_Atlas --view <tree|map|learn>   start in a specific view
 USB_Atlas --lesson <name>      open a guide chapter (e.g. names, speeds, companion)
 ```
 
+## Download
+
+Grab `USB_Atlas.exe` from the [latest release](https://github.com/kaislate/USB-Atlas/releases/latest).
+It is a single portable file – no installer, no runtime. Windows 10/11 (x64).
+
+Windows SmartScreen may warn about an unrecognized app because the binary
+isn't code-signed; choose **More info → Run anyway**, or build it yourself.
+
 ## Building
 
 Requires Rust 1.92+ with the MSVC toolchain on Windows.

@@ -14,8 +14,12 @@ fn readme_screenshots() {
     let shots: [(&str, Setup); 5] = [
         ("tree", |a| a.select_by_name("ultra fit")),
         ("map", |a| a.view = ViewMode::Map),
-        ("learn-speeds", |a| a.apply_launch_view(None, Some("speed comparison"))),
-        ("learn-companion", |a| a.apply_launch_view(None, Some("companion"))),
+        ("learn-speeds", |a| {
+            a.apply_launch_view(None, Some("speed comparison"))
+        }),
+        ("learn-companion", |a| {
+            a.apply_launch_view(None, Some("companion"))
+        }),
         ("learn-names", |a| {
             a.learn.open(Chapter::Names);
             a.view = ViewMode::Learn;
